@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Camera } from 'lucide-react';
+import { ArrowLeft, Save, Camera, ImagePlus } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { getFullName } from '../utils/helpers';
 import styles from './PersonEdit.module.css';
@@ -17,6 +17,9 @@ export default function PersonEdit() {
   const addPhoto = useStore((state) => state.addPhoto);
 
   const existingPerson = !isNew ? persons.find((p) => p.id === id) : null;
+
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState({
     firstName: '',
@@ -139,16 +142,39 @@ export default function PersonEdit() {
       <form className={styles.form} onSubmit={handleSubmit}>
         {!isNew && existingPerson && (
           <div className={styles.photoSection}>
-            <label className={styles.photoUpload}>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handlePhotoUpload}
-                hidden
-              />
-              <Camera size={24} />
-              <span>Add Photo</span>
-            </label>
+            <div className={styles.photoButtons}>
+              <button
+                type="button"
+                className={styles.photoUpload}
+                onClick={() => cameraInputRef.current?.click()}
+              >
+                <Camera size={24} />
+                <span>Take Photo</span>
+              </button>
+              <button
+                type="button"
+                className={styles.photoUpload}
+                onClick={() => galleryInputRef.current?.click()}
+              >
+                <ImagePlus size={24} />
+                <span>Gallery</span>
+              </button>
+            </div>
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={handlePhotoUpload}
+              hidden
+            />
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handlePhotoUpload}
+              hidden
+            />
             {existingPerson.photos.length > 0 && (
               <div className={styles.photoPreview}>
                 {existingPerson.photos.slice(0, 4).map((photo) => (
