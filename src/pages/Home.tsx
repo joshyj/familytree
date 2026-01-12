@@ -97,8 +97,8 @@ export default function Home() {
                   className={styles.personCard}
                   onClick={() => navigate(`/person/${person.id}`)}
                 >
-                  {person.profilePhoto ? (
-                    <img src={person.profilePhoto} alt="" className={styles.personPhoto} />
+                  {(person.profilePhoto || person.photos?.[0]?.url) ? (
+                    <img src={person.profilePhoto || person.photos[0].url} alt="" className={styles.personPhoto} />
                   ) : (
                     <div
                       className={styles.personAvatar}

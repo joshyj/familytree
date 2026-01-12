@@ -70,9 +70,9 @@ export default function Search() {
                     className={styles.resultItem}
                     onClick={() => navigate(`/person/${person.id}`)}
                   >
-                    {person.profilePhoto ? (
+                    {(person.profilePhoto || person.photos?.[0]?.url) ? (
                       <img
-                        src={person.profilePhoto}
+                        src={person.profilePhoto || person.photos[0].url}
                         alt=""
                         className={styles.avatar}
                       />
@@ -112,9 +112,9 @@ export default function Search() {
                       className={styles.resultItem}
                       onClick={() => navigate(`/person/${person.id}`)}
                     >
-                      {person.profilePhoto ? (
+                      {(person.profilePhoto || person.photos?.[0]?.url) ? (
                         <img
-                          src={person.profilePhoto}
+                          src={person.profilePhoto || person.photos[0].url}
                           alt=""
                           className={styles.avatar}
                         />

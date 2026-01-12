@@ -87,8 +87,8 @@ export default function PersonDetail() {
       </header>
 
       <div className={styles.profile}>
-        {person.profilePhoto ? (
-          <img src={person.profilePhoto} alt="" className={styles.avatar} />
+        {(person.profilePhoto || person.photos?.[0]?.url) ? (
+          <img src={person.profilePhoto || person.photos[0].url} alt="" className={styles.avatar} />
         ) : (
           <div
             className={styles.avatarPlaceholder}

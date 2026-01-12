@@ -104,14 +104,21 @@ export default function Tree() {
     }
   };
 
-  const renderPersonCard = (person: Person, isSpouse = false) => (
+  const getPersonPhoto = (person: Person): string | undefined => {
+    return person.profilePhoto || person.photos?.[0]?.url;
+  };
+
+  const renderPersonCard = (person: Person, isSpouse = false) => {
+    const photoUrl = getPersonPhoto(person);
+
+    return (
     <button
       key={person.id}
       className={`${styles.personCard} ${getGenderClass(person.gender)} ${isSpouse ? styles.spouseCard : ''}`}
       onClick={() => navigate(`/person/${person.id}`)}
     >
-      {person.profilePhoto ? (
-        <img src={person.profilePhoto} alt="" className={styles.avatar} />
+      {photoUrl ? (
+        <img src={photoUrl} alt="" className={styles.avatar} />
       ) : (
         <div
           className={styles.avatarPlaceholder}
@@ -134,7 +141,8 @@ export default function Tree() {
         )}
       </div>
     </button>
-  );
+    );
+  };
 
   const renderFamilyUnit = (unit: FamilyUnit, isRoot = false) => {
     const { person, spouse, children } = unit;
