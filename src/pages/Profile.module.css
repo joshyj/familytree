@@ -1,44 +1,86 @@
 .container {
-  padding: 24px 16px;
-  padding-bottom: 100px;
+  padding: 0 16px 100px;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
 }
 
 .header {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 32px 0;
+  padding: 40px 24px;
+  margin: 0 -16px 24px;
+  background: linear-gradient(135deg, var(--primary) 0%, #6366f1 100%);
+  border-radius: 0 0 32px 32px;
+  position: relative;
+  overflow: hidden;
+}
+
+.header::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  right: -30%;
+  width: 300px;
+  height: 300px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+}
+
+.header::after {
+  content: '';
+  position: absolute;
+  bottom: -30%;
+  left: -20%;
+  width: 200px;
+  height: 200px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 50%;
 }
 
 .avatar {
-  width: 96px;
-  height: 96px;
+  width: 110px;
+  height: 110px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   color: white;
-  font-size: 32px;
+  font-size: 36px;
   font-weight: 700;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
+  position: relative;
+  z-index: 1;
+  border: 4px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
 }
 
 .name {
-  font-size: 24px;
+  font-size: 26px;
   font-weight: 700;
-  color: var(--gray-800);
-  margin-bottom: 4px;
+  color: white;
+  margin-bottom: 6px;
+  position: relative;
+  z-index: 1;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 .email {
-  font-size: 14px;
-  color: var(--gray-500);
-  margin-bottom: 8px;
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.9);
+  margin-bottom: 10px;
+  position: relative;
+  z-index: 1;
 }
 
 .joined {
-  font-size: 12px;
-  color: var(--gray-400);
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+  position: relative;
+  z-index: 1;
+  background: rgba(255, 255, 255, 0.15);
+  padding: 6px 14px;
+  border-radius: 20px;
 }
 
 .stats {
@@ -50,17 +92,52 @@
 
 .statItem {
   background: white;
-  border-radius: var(--radius-lg);
-  padding: 16px;
+  border-radius: 16px;
+  padding: 20px 16px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  box-shadow: var(--shadow);
+  gap: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.statItem::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.statItem:nth-child(1)::before {
+  background: linear-gradient(90deg, #4A90D9 0%, #6366f1 100%);
+}
+
+.statItem:nth-child(2)::before {
+  background: linear-gradient(90deg, #D94A8C 0%, #f472b6 100%);
+}
+
+.statItem:nth-child(3)::before {
+  background: linear-gradient(90deg, #10B981 0%, #34d399 100%);
+}
+
+.statItem:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+.statItem:hover::before {
+  opacity: 1;
 }
 
 .statNumber {
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 700;
   color: var(--gray-800);
 }
@@ -68,6 +145,9 @@
 .statLabel {
   font-size: 12px;
   color: var(--gray-500);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .section {
@@ -75,37 +155,52 @@
 }
 
 .sectionTitle {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--gray-500);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 12px;
+  letter-spacing: 0.8px;
+  margin-bottom: 14px;
   padding: 0 4px;
 }
 
 .menuList {
   background: white;
-  border-radius: var(--radius-lg);
+  border-radius: 16px;
   overflow: hidden;
-  box-shadow: var(--shadow);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
 }
 
 .menuItem {
   display: flex;
   align-items: center;
   width: 100%;
-  padding: 16px;
+  padding: 18px 16px;
   border-bottom: 1px solid var(--gray-100);
+  transition: all 0.2s ease;
 }
 
 .menuItem:last-child {
   border-bottom: none;
 }
 
+.menuItem:hover {
+  background: var(--gray-50);
+}
+
+.menuItem:hover .menuIcon {
+  color: var(--primary);
+}
+
+.menuItem:hover .menuArrow {
+  transform: translateX(4px);
+  color: var(--primary);
+}
+
 .menuIcon {
   color: var(--gray-400);
-  margin-right: 12px;
+  margin-right: 14px;
+  transition: color 0.2s ease;
 }
 
 .menuLabel {
@@ -113,27 +208,56 @@
   text-align: left;
   font-size: 16px;
   color: var(--gray-800);
+  font-weight: 500;
 }
 
 .menuArrow {
   color: var(--gray-300);
+  transition: all 0.2s ease;
 }
 
 .logoutButton {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  padding: 16px;
+  padding: 18px;
   background: white;
-  border-radius: var(--radius-lg);
+  border-radius: 16px;
   color: #DC2626;
   font-size: 16px;
   font-weight: 600;
-  box-shadow: var(--shadow);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.logoutButton::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
 }
 
 .logoutButton:hover {
-  background: #FEE2E2;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(220, 38, 38, 0.15);
+}
+
+.logoutButton:hover::before {
+  opacity: 1;
+}
+
+.logoutButton svg,
+.logoutButton span {
+  position: relative;
+  z-index: 1;
+}
+
+.logoutButton:active {
+  transform: translateY(0);
 }
