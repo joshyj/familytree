@@ -1,9 +1,30 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Camera, ImagePlus } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { getFullName } from '../utils/helpers';
+import { Person } from '../types';
 import styles from './PersonEdit.module.css';
+
+// Get all descendants of a person (children, grandchildren, etc.) to prevent cycles
+function getAllDescendants(
+  personId: string,
+  personsRecord: Record<string, Person>,
+  visited = new Set<string>()
+): Set<string> {
+  if (visited.has(personId)) return visited;
+  visited.add(personId);
+
+  const person = personsRecord[personId];
+  if (!person) return visited;
+
+  const childIds = [...new Set([...person.children, ...person.childrenIds])];
+  for (const childId of childIds) {
+    getAllDescendants(childId, personsRecord, visited);
+  }
+
+  return visited;
+}
 
 export default function PersonEdit() {
   const { id } = useParams<{ id: string }>();
@@ -55,7 +76,13 @@ export default function PersonEdit() {
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
   ) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
+    setFormData((prev) => {
+      // If spouse is changed, remove them from parents if they were selected
+      if (name === 'spouseId' && value && prev.parents.includes(value)) {
+        return { ...prev, [name]: value, parents: prev.parents.filter((id) => id !== value) };
+      }
+      return { ...prev, [name]: value };
+    });
   };
 
   const handleParentToggle = (personId: string) => {
@@ -121,9 +148,19 @@ export default function PersonEdit() {
   };
 
   const availableSpouses = persons.filter(
-    (p) => p.id !== id && !p.spouseId
+    (p) => p.id !== id && (!p.spouseId || p.spouseId === id)
   );
-  const availableParents = persons.filter((p) => p.id !== id);
+
+  // Get all descendants to prevent cycle in parent-child hierarchy
+  const descendantIds = useMemo(() => {
+    if (!id || isNew) return new Set<string>();
+    return getAllDescendants(id, personsRecord);
+  }, [id, isNew, personsRecord]);
+
+  // Exclude self, all descendants, and selected spouse from available parents
+  const availableParents = persons.filter(
+    (p) => p.id !== id && !descendantIds.has(p.id) && p.id !== formData.spouseId
+  );
 
   return (
     <div className={styles.container}>
@@ -324,9 +361,18 @@ export default function PersonEdit() {
           </div>
         </div>
 
-        <button type="submit" className={styles.submitButton}>
-          {isNew ? 'Add Person' : 'Save Changes'}
-        </button>
+        <div className={styles.formActions}>
+          <button
+            type="button"
+            className={styles.cancelButton}
+            onClick={() => navigate(-1)}
+          >
+            Cancel
+          </button>
+          <button type="submit" className={styles.submitButton}>
+            {isNew ? 'Add Person' : 'Save Changes'}
+          </button>
+        </div>
       </form>
     </div>
   );

@@ -539,4 +539,96 @@ test.describe('FamilyRoots App - Full Test Suite', () => {
     // The avatar should be an img element with data URL
     await expect(page.locator('img[src^="data:"]')).toBeVisible({ timeout: 5000 });
   });
+
+  test('TC-CYCLE-001: Prevent Parent-Child Cycle', async ({ page }) => {
+    const testEmail = `cycle${Date.now()}@example.com`;
+
+    // Register
+    await page.goto('/register');
+    await page.fill('input[placeholder="Full Name"]', testName);
+    await page.fill('input[placeholder="Email"]', testEmail);
+    await page.fill('input[placeholder*="Password"]', testPassword);
+    await page.fill('input[placeholder="Confirm Password"]', testPassword);
+    await page.click('button[type="submit"]');
+    await expect(page.locator('text=Welcome back')).toBeVisible({ timeout: 5000 });
+
+    // Add parent person
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await expect(page.locator('h1')).toContainText('Add Person', { timeout: 5000 });
+    await page.fill('input[name="firstName"]', 'Parent');
+    await page.fill('input[name="lastName"]', 'Person');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('text=Parent Person')).toBeVisible({ timeout: 5000 });
+
+    // Go back to home and add child
+    await page.click('nav >> text=Home');
+    await expect(page.locator('text=Welcome back')).toBeVisible({ timeout: 5000 });
+
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await expect(page.locator('h1')).toContainText('Add Person', { timeout: 5000 });
+    await page.fill('input[name="firstName"]', 'Child');
+    await page.fill('input[name="lastName"]', 'Person');
+
+    // Select Parent Person as a parent - click the checkbox input directly
+    const parentCheckbox = page.locator('input[type="checkbox"]').first();
+    await parentCheckbox.check();
+
+    // Submit the form
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('h1:has-text("Child Person")')).toBeVisible({ timeout: 5000 });
+
+    // Now go to tree and find Parent Person to edit
+    await page.click('nav >> text=Tree');
+    await expect(page.locator('h1')).toContainText('Family Tree', { timeout: 5000 });
+
+    // Click on Parent Person in the tree (look for the person card)
+    await page.locator('text=Parent Person').first().click();
+    await expect(page.locator('h1:has-text("Parent Person")')).toBeVisible({ timeout: 5000 });
+
+    // Click edit button (second button in header)
+    await page.locator('header button').nth(1).click();
+    await expect(page.locator('h1')).toContainText('Edit Person', { timeout: 5000 });
+
+    // Verify Child Person is NOT in the parents checkbox list (cycle prevention)
+    // The child should not appear as an available parent option
+    const childInParentsList = page.locator('label').filter({ hasText: 'Child Person' });
+    await expect(childInParentsList).toHaveCount(0);
+  });
+
+  test('TC-CYCLE-002: Spouse Excluded from Parents List', async ({ page }) => {
+    const testEmail = `spouse-parent${Date.now()}@example.com`;
+
+    // Register
+    await page.goto('/register');
+    await page.fill('input[placeholder="Full Name"]', testName);
+    await page.fill('input[placeholder="Email"]', testEmail);
+    await page.fill('input[placeholder*="Password"]', testPassword);
+    await page.fill('input[placeholder="Confirm Password"]', testPassword);
+    await page.click('button[type="submit"]');
+    await expect(page.locator('text=Welcome back')).toBeVisible({ timeout: 5000 });
+
+    // Add first person (will be spouse)
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await expect(page.locator('h1')).toContainText('Add Person', { timeout: 5000 });
+    await page.fill('input[name="firstName"]', 'Spouse');
+    await page.fill('input[name="lastName"]', 'Person');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('text=Spouse Person')).toBeVisible({ timeout: 5000 });
+
+    // Add second person and select first as spouse
+    await page.click('nav >> text=Home');
+    await expect(page.locator('text=Welcome back')).toBeVisible({ timeout: 5000 });
+
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await expect(page.locator('h1')).toContainText('Add Person', { timeout: 5000 });
+    await page.fill('input[name="firstName"]', 'Main');
+    await page.fill('input[name="lastName"]', 'Person');
+
+    // Select Spouse Person as spouse
+    await page.selectOption('select[name="spouseId"]', { label: 'Spouse Person' });
+
+    // Verify Spouse Person is NOT in the parents checkbox list
+    const spouseInParentsList = page.locator('label').filter({ hasText: 'Spouse Person' });
+    await expect(spouseInParentsList).toHaveCount(0);
+  });
 });

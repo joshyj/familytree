@@ -252,3 +252,31 @@
 .submitButton:active {
   transform: translateY(0);
 }
+
+.formActions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.cancelButton {
+  flex: 1;
+  padding: 18px;
+  background: white;
+  color: var(--gray-600);
+  font-size: 17px;
+  font-weight: 600;
+  border-radius: 14px;
+  border: 2px solid var(--gray-200);
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.cancelButton:hover {
+  background: var(--gray-100);
+  border-color: var(--gray-300);
+}
+
+.formActions .submitButton {
+  flex: 1;
+  margin-top: 0;
+}
