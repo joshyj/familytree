@@ -409,4 +409,134 @@ test.describe('FamilyRoots App - Full Test Suite', () => {
     await expect(page.locator('h1')).toContainText('FamilyRoots');
     await expect(page.locator('text=Sign In')).toBeVisible();
   });
+
+  test('TC-PHOTO-001: Photo Upload UI on Edit Page', async ({ page }) => {
+    const testEmail = `photo-ui${Date.now()}@example.com`;
+
+    // Register
+    await page.goto('/register');
+    await page.fill('input[placeholder="Full Name"]', testName);
+    await page.fill('input[placeholder="Email"]', testEmail);
+    await page.fill('input[placeholder*="Password"]', testPassword);
+    await page.fill('input[placeholder="Confirm Password"]', testPassword);
+    await page.click('button[type="submit"]');
+    await expect(page.locator('text=Welcome back')).toBeVisible({ timeout: 5000 });
+
+    // Add a person first
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await expect(page.locator('h1')).toContainText('Add Person', { timeout: 5000 });
+
+    await page.fill('input[name="firstName"]', 'Photo');
+    await page.fill('input[name="lastName"]', 'Test');
+    await page.locator('button[type="submit"]').click();
+
+    // Wait for person detail page
+    await expect(page.locator('text=Photo Test')).toBeVisible({ timeout: 5000 });
+
+    // Click edit button
+    await page.locator('header button').nth(1).click();
+    await expect(page.locator('h1')).toContainText('Edit Person', { timeout: 5000 });
+
+    // Should see Take Photo and Gallery buttons
+    await expect(page.locator('button:has-text("Take Photo")')).toBeVisible();
+    await expect(page.locator('button:has-text("Gallery")')).toBeVisible();
+  });
+
+  test('TC-PHOTO-002: Upload Photo via Gallery', async ({ page }) => {
+    const testEmail = `photo-upload${Date.now()}@example.com`;
+
+    // Register
+    await page.goto('/register');
+    await page.fill('input[placeholder="Full Name"]', testName);
+    await page.fill('input[placeholder="Email"]', testEmail);
+    await page.fill('input[placeholder*="Password"]', testPassword);
+    await page.fill('input[placeholder="Confirm Password"]', testPassword);
+    await page.click('button[type="submit"]');
+    await expect(page.locator('text=Welcome back')).toBeVisible({ timeout: 5000 });
+
+    // Add a person
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'Upload');
+    await page.fill('input[name="lastName"]', 'Test');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('text=Upload Test')).toBeVisible({ timeout: 5000 });
+
+    // Go to edit page
+    await page.locator('header button').nth(1).click();
+    await expect(page.locator('h1')).toContainText('Edit Person', { timeout: 5000 });
+
+    // Create a small test image (1x1 red pixel PNG)
+    const testImageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
+    const testImageBuffer = Buffer.from(testImageBase64, 'base64');
+
+    // Make the hidden file input visible and set file
+    await page.evaluate(() => {
+      const inputs = document.querySelectorAll('input[type="file"]');
+      inputs.forEach(input => (input as HTMLInputElement).removeAttribute('hidden'));
+    });
+
+    // Set file on the gallery input (second one, without capture)
+    const galleryInput = page.locator('input[type="file"]').nth(1);
+    await galleryInput.setInputFiles({
+      name: 'test-photo.png',
+      mimeType: 'image/png',
+      buffer: testImageBuffer,
+    });
+
+    // Should see photo preview (look for img with data: src)
+    await expect(page.locator('img[src^="data:"]')).toBeVisible({ timeout: 10000 });
+  });
+
+  test('TC-PHOTO-003: Photo Displays in Person Detail', async ({ page }) => {
+    const testEmail = `photo-detail${Date.now()}@example.com`;
+
+    // Register
+    await page.goto('/register');
+    await page.fill('input[placeholder="Full Name"]', testName);
+    await page.fill('input[placeholder="Email"]', testEmail);
+    await page.fill('input[placeholder*="Password"]', testPassword);
+    await page.fill('input[placeholder="Confirm Password"]', testPassword);
+    await page.click('button[type="submit"]');
+    await expect(page.locator('text=Welcome back')).toBeVisible({ timeout: 5000 });
+
+    // Add a person
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'DetailPhoto');
+    await page.fill('input[name="lastName"]', 'Person');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('text=DetailPhoto Person')).toBeVisible({ timeout: 5000 });
+
+    // Go to edit page and upload photo
+    await page.locator('header button').nth(1).click();
+    await expect(page.locator('h1')).toContainText('Edit Person', { timeout: 5000 });
+
+    const testImageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
+    const testImageBuffer = Buffer.from(testImageBase64, 'base64');
+
+    // Make the hidden file input visible and set file
+    await page.evaluate(() => {
+      const inputs = document.querySelectorAll('input[type="file"]');
+      inputs.forEach(input => (input as HTMLInputElement).removeAttribute('hidden'));
+    });
+
+    // Set file on the gallery input (second one, without capture)
+    const galleryInput = page.locator('input[type="file"]').nth(1);
+    await galleryInput.setInputFiles({
+      name: 'detail-photo.png',
+      mimeType: 'image/png',
+      buffer: testImageBuffer,
+    });
+
+    // Wait for photo to be added in edit form (look for img with data: src)
+    await expect(page.locator('img[src^="data:"]')).toBeVisible({ timeout: 10000 });
+
+    // Save changes
+    await page.locator('button[type="submit"]').click();
+
+    // Should be on person detail page with photo as avatar
+    await expect(page.locator('text=DetailPhoto Person')).toBeVisible({ timeout: 5000 });
+
+    // The avatar should be an img element with data URL
+    await expect(page.locator('img[src^="data:"]')).toBeVisible({ timeout: 5000 });
+  });
 });
