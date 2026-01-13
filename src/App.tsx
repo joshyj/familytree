@@ -29,7 +29,7 @@ function AppContent() {
   const isLoading = useStore((state) => state.isLoading);
 
   useEffect(() => {
-    // Check for existing Supabase session on app load
+    // Check for existing Firebase session on app load
     checkSession();
   }, [checkSession]);
 

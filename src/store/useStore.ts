@@ -1,5 +1,27 @@
 import { create } from 'zustand';
-import { supabase } from '../lib/supabase';
+import { auth, db } from '../lib/firebase';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  User as FirebaseUser,
+} from 'firebase/auth';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  query,
+  where,
+  orderBy,
+  serverTimestamp,
+  Timestamp,
+} from 'firebase/firestore';
 import { Person, User, Comment, Story, Photo, SpouseRelationship, ParentRelationship } from '../types';
 
 interface AppState {
@@ -68,26 +90,26 @@ interface AppState {
   getSiblings: (personId: string) => Person[];
 }
 
-// Helper to convert DB row to Person type
-const dbRowToPerson = (row: any, relationships: any[] = []): Person => {
+// Helper to convert Firestore document to Person type
+const docToPerson = (docData: any, docId: string, relationships: any[] = []): Person => {
   const spouseRelationships: SpouseRelationship[] = relationships
-    .filter(r => r.relationship_type === 'spouse' && r.person_id === row.id)
+    .filter(r => r.relationshipType === 'spouse' && r.personId === docId)
     .map(r => ({
-      personId: r.related_person_id,
+      personId: r.relatedPersonId,
       status: (r.subtype || 'current') as SpouseRelationship['status'],
     }));
 
   const parentRelationships: ParentRelationship[] = relationships
-    .filter(r => r.relationship_type === 'parent' && r.person_id === row.id)
+    .filter(r => r.relationshipType === 'parent' && r.personId === docId)
     .map(r => ({
-      personId: r.related_person_id,
+      personId: r.relatedPersonId,
       type: (r.subtype || 'biological') as ParentRelationship['type'],
     }));
 
   // Get children (where this person is the related_person in a parent relationship)
   const childIds = relationships
-    .filter(r => r.relationship_type === 'parent' && r.related_person_id === row.id)
-    .map(r => r.person_id);
+    .filter(r => r.relationshipType === 'parent' && r.relatedPersonId === docId)
+    .map(r => r.personId);
 
   // Get parent IDs
   const parentIds = parentRelationships.map(r => r.personId);
@@ -97,21 +119,21 @@ const dbRowToPerson = (row: any, relationships: any[] = []): Person => {
   const currentSpouse = spouseRelationships.find(r => r.status === 'current');
 
   return {
-    id: row.id,
-    firstName: row.first_name,
-    lastName: row.last_name || '',
-    nickname: row.nickname,
-    gender: row.gender,
-    birthDate: row.birth_date,
-    birthPlace: row.birth_place,
-    deathDate: row.death_date,
-    deathPlace: row.death_place,
-    isLiving: row.is_living ?? true,
-    profilePhoto: row.profile_photo,
-    photos: [], // Will be loaded separately if needed
-    bio: row.bio,
-    occupation: row.occupation,
-    fatherId: undefined, // Will be computed from relationships
+    id: docId,
+    firstName: docData.firstName,
+    lastName: docData.lastName || '',
+    nickname: docData.nickname,
+    gender: docData.gender,
+    birthDate: docData.birthDate,
+    birthPlace: docData.birthPlace,
+    deathDate: docData.deathDate,
+    deathPlace: docData.deathPlace,
+    isLiving: docData.isLiving ?? true,
+    profilePhoto: docData.profilePhoto,
+    photos: [],
+    bio: docData.bio,
+    occupation: docData.occupation,
+    fatherId: undefined,
     motherId: undefined,
     spouseId: currentSpouse?.personId,
     spouseIds,
@@ -120,10 +142,18 @@ const dbRowToPerson = (row: any, relationships: any[] = []): Person => {
     children: childIds,
     childrenIds: childIds,
     parents: parentIds,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    createdBy: row.created_by,
+    createdAt: docData.createdAt instanceof Timestamp ? docData.createdAt.toDate().toISOString() : docData.createdAt,
+    updatedAt: docData.updatedAt instanceof Timestamp ? docData.updatedAt.toDate().toISOString() : docData.updatedAt,
+    createdBy: docData.createdBy,
   };
+};
+
+// Helper to convert Timestamp to ISO string
+const timestampToString = (ts: any): string => {
+  if (ts instanceof Timestamp) {
+    return ts.toDate().toISOString();
+  }
+  return ts || new Date().toISOString();
 };
 
 export const useStore = create<AppState>()((set, get) => ({
@@ -139,97 +169,88 @@ export const useStore = create<AppState>()((set, get) => ({
   selectedPersonId: null,
 
   checkSession: async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
+    return new Promise<void>((resolve) => {
+      const unsubscribe = onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
+        unsubscribe();
 
-      if (session?.user) {
-        // Get profile data
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
+        if (firebaseUser) {
+          try {
+            // Get profile data from Firestore
+            const profileDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+            const profileData = profileDoc.exists() ? profileDoc.data() : null;
 
-        const user: User = {
-          id: session.user.id,
-          email: session.user.email || '',
-          displayName: profile?.display_name || session.user.email?.split('@')[0] || 'User',
-          avatarUrl: profile?.avatar_url,
-          role: 'admin',
-          familyTreeId: profile?.current_family_tree_id || 'default',
-          createdAt: session.user.created_at,
-        };
+            const user: User = {
+              id: firebaseUser.uid,
+              email: firebaseUser.email || '',
+              displayName: profileData?.displayName || firebaseUser.email?.split('@')[0] || 'User',
+              avatarUrl: profileData?.avatarUrl,
+              role: 'admin',
+              familyTreeId: profileData?.currentFamilyTreeId || 'default',
+              createdAt: firebaseUser.metadata.creationTime || new Date().toISOString(),
+            };
 
-        set({
-          currentUser: user,
-          isAuthenticated: true,
-          currentFamilyTreeId: profile?.current_family_tree_id,
-          isLoading: false,
-        });
+            set({
+              currentUser: user,
+              isAuthenticated: true,
+              currentFamilyTreeId: profileData?.currentFamilyTreeId,
+              isLoading: false,
+            });
 
-        // Load persons if we have a family tree
-        if (profile?.current_family_tree_id) {
-          await get().loadPersons();
+            // Load persons if we have a family tree
+            if (profileData?.currentFamilyTreeId) {
+              await get().loadPersons();
+            }
+          } catch (error) {
+            console.error('Error fetching profile:', error);
+            set({ isLoading: false });
+          }
+        } else {
+          set({ isLoading: false });
         }
-      } else {
-        set({ isLoading: false });
-      }
-    } catch (error) {
-      console.error('Session check error:', error);
-      set({ isLoading: false });
-    }
+        resolve();
+      });
+    });
   },
 
   login: async (email, password) => {
     set({ authError: null, isLoading: true });
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const firebaseUser = userCredential.user;
+
+      // Get profile data from Firestore
+      const profileDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+      const profileData = profileDoc.exists() ? profileDoc.data() : null;
+
+      const user: User = {
+        id: firebaseUser.uid,
+        email: firebaseUser.email || '',
+        displayName: profileData?.displayName || email.split('@')[0],
+        avatarUrl: profileData?.avatarUrl,
+        role: 'admin',
+        familyTreeId: profileData?.currentFamilyTreeId || 'default',
+        createdAt: firebaseUser.metadata.creationTime || new Date().toISOString(),
+      };
+
+      set({
+        currentUser: user,
+        isAuthenticated: true,
+        currentFamilyTreeId: profileData?.currentFamilyTreeId,
+        isLoading: false,
       });
 
-      if (error) {
-        set({ authError: error.message, isLoading: false });
-        return false;
+      // Load persons if we have a family tree
+      if (profileData?.currentFamilyTreeId) {
+        await get().loadPersons();
       }
 
-      if (data.user) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', data.user.id)
-          .single();
-
-        const user: User = {
-          id: data.user.id,
-          email: data.user.email || '',
-          displayName: profile?.display_name || email.split('@')[0],
-          avatarUrl: profile?.avatar_url,
-          role: 'admin',
-          familyTreeId: profile?.current_family_tree_id || 'default',
-          createdAt: data.user.created_at,
-        };
-
-        set({
-          currentUser: user,
-          isAuthenticated: true,
-          currentFamilyTreeId: profile?.current_family_tree_id,
-          isLoading: false,
-        });
-
-        // Load persons if we have a family tree
-        if (profile?.current_family_tree_id) {
-          await get().loadPersons();
-        }
-
-        return true;
-      }
-
-      set({ isLoading: false });
-      return false;
+      return true;
     } catch (error: any) {
-      set({ authError: error.message, isLoading: false });
+      const errorMessage = error.code === 'auth/invalid-credential'
+        ? 'Invalid email or password'
+        : error.message;
+      set({ authError: errorMessage, isLoading: false });
       return false;
     }
   },
@@ -238,64 +259,70 @@ export const useStore = create<AppState>()((set, get) => ({
     set({ authError: null, isLoading: true });
 
     try {
-      const { data, error } = await supabase.auth.signUp({
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const firebaseUser = userCredential.user;
+
+      // Create user profile in Firestore
+      await setDoc(doc(db, 'users', firebaseUser.uid), {
         email,
-        password,
-        options: {
-          data: { display_name: displayName },
-        },
+        displayName,
+        avatarUrl: null,
+        currentFamilyTreeId: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
 
-      if (error) {
-        set({ authError: error.message, isLoading: false });
-        return false;
-      }
+      // Create a default family tree for new users
+      const treeRef = await addDoc(collection(db, 'familyTrees'), {
+        name: `${displayName}'s Family Tree`,
+        description: null,
+        createdBy: firebaseUser.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
-      if (data.user) {
-        // Create a default family tree for new users
-        const { data: treeData, error: treeError } = await supabase
-          .from('family_trees')
-          .insert({
-            name: `${displayName}'s Family Tree`,
-            created_by: data.user.id,
-          })
-          .select()
-          .single();
+      // Add user as admin member of the family tree
+      await addDoc(collection(db, 'familyTreeMembers'), {
+        familyTreeId: treeRef.id,
+        userId: firebaseUser.uid,
+        role: 'admin',
+        joinedAt: serverTimestamp(),
+      });
 
-        if (treeError) {
-          console.error('Error creating family tree:', treeError);
-        }
+      // Update user's current family tree
+      await updateDoc(doc(db, 'users', firebaseUser.uid), {
+        currentFamilyTreeId: treeRef.id,
+      });
 
-        const user: User = {
-          id: data.user.id,
-          email: data.user.email || '',
-          displayName,
-          role: 'admin',
-          familyTreeId: treeData?.id || 'default',
-          createdAt: data.user.created_at,
-        };
+      const user: User = {
+        id: firebaseUser.uid,
+        email: firebaseUser.email || '',
+        displayName,
+        role: 'admin',
+        familyTreeId: treeRef.id,
+        createdAt: firebaseUser.metadata.creationTime || new Date().toISOString(),
+      };
 
-        set({
-          currentUser: user,
-          isAuthenticated: true,
-          currentFamilyTreeId: treeData?.id || null,
-          familyTreeName: treeData?.name || null,
-          isLoading: false,
-        });
+      set({
+        currentUser: user,
+        isAuthenticated: true,
+        currentFamilyTreeId: treeRef.id,
+        familyTreeName: `${displayName}'s Family Tree`,
+        isLoading: false,
+      });
 
-        return true;
-      }
-
-      set({ isLoading: false });
-      return false;
+      return true;
     } catch (error: any) {
-      set({ authError: error.message, isLoading: false });
+      const errorMessage = error.code === 'auth/email-already-in-use'
+        ? 'Email already in use'
+        : error.message;
+      set({ authError: errorMessage, isLoading: false });
       return false;
     }
   },
 
   logout: async () => {
-    await supabase.auth.signOut();
+    await signOut(auth);
     set({
       currentUser: null,
       isAuthenticated: false,
@@ -312,23 +339,24 @@ export const useStore = create<AppState>()((set, get) => ({
     if (!currentUser) return null;
 
     try {
-      const { data, error } = await supabase
-        .from('family_trees')
-        .insert({
-          name,
-          description,
-          created_by: currentUser.id,
-        })
-        .select()
-        .single();
+      const treeRef = await addDoc(collection(db, 'familyTrees'), {
+        name,
+        description: description || null,
+        createdBy: currentUser.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
-      if (error) {
-        console.error('Error creating family tree:', error);
-        return null;
-      }
+      // Add user as admin
+      await addDoc(collection(db, 'familyTreeMembers'), {
+        familyTreeId: treeRef.id,
+        userId: currentUser.id,
+        role: 'admin',
+        joinedAt: serverTimestamp(),
+      });
 
-      set({ currentFamilyTreeId: data.id, familyTreeName: data.name });
-      return data.id;
+      set({ currentFamilyTreeId: treeRef.id, familyTreeName: name });
+      return treeRef.id;
     } catch (error) {
       console.error('Error creating family tree:', error);
       return null;
@@ -341,24 +369,17 @@ export const useStore = create<AppState>()((set, get) => ({
 
     try {
       // Add user as viewer to the family tree
-      const { error } = await supabase
-        .from('family_tree_members')
-        .insert({
-          family_tree_id: treeId,
-          user_id: currentUser.id,
-          role: 'viewer',
-        });
-
-      if (error) {
-        console.error('Error joining family tree:', error);
-        return false;
-      }
+      await addDoc(collection(db, 'familyTreeMembers'), {
+        familyTreeId: treeId,
+        userId: currentUser.id,
+        role: 'viewer',
+        joinedAt: serverTimestamp(),
+      });
 
       // Update user's current family tree
-      await supabase
-        .from('profiles')
-        .update({ current_family_tree_id: treeId })
-        .eq('id', currentUser.id);
+      await updateDoc(doc(db, 'users', currentUser.id), {
+        currentFamilyTreeId: treeId,
+      });
 
       set({ currentFamilyTreeId: treeId });
       await get().loadPersons();
@@ -375,10 +396,9 @@ export const useStore = create<AppState>()((set, get) => ({
     if (!currentUser) return;
 
     // Update user's current family tree
-    await supabase
-      .from('profiles')
-      .update({ current_family_tree_id: treeId })
-      .eq('id', currentUser.id);
+    await updateDoc(doc(db, 'users', currentUser.id), {
+      currentFamilyTreeId: treeId,
+    });
 
     set({ currentFamilyTreeId: treeId, persons: {} });
     await get().loadPersons();
@@ -389,27 +409,27 @@ export const useStore = create<AppState>()((set, get) => ({
     if (!currentUser) return [];
 
     try {
-      const { data, error } = await supabase
-        .from('family_tree_members')
-        .select(`
-          role,
-          family_trees (
-            id,
-            name
-          )
-        `)
-        .eq('user_id', currentUser.id);
+      const membersQuery = query(
+        collection(db, 'familyTreeMembers'),
+        where('userId', '==', currentUser.id)
+      );
+      const membersSnapshot = await getDocs(membersQuery);
 
-      if (error) {
-        console.error('Error fetching family trees:', error);
-        return [];
+      const trees: { id: string; name: string; role: string }[] = [];
+
+      for (const memberDoc of membersSnapshot.docs) {
+        const memberData = memberDoc.data();
+        const treeDoc = await getDoc(doc(db, 'familyTrees', memberData.familyTreeId));
+        if (treeDoc.exists()) {
+          trees.push({
+            id: treeDoc.id,
+            name: treeDoc.data().name,
+            role: memberData.role,
+          });
+        }
       }
 
-      return data.map((item: any) => ({
-        id: item.family_trees.id,
-        name: item.family_trees.name,
-        role: item.role,
-      }));
+      return trees;
     } catch (error) {
       console.error('Error fetching family trees:', error);
       return [];
@@ -422,32 +442,25 @@ export const useStore = create<AppState>()((set, get) => ({
 
     try {
       // Load all persons for the family tree
-      const { data: personsData, error: personsError } = await supabase
-        .from('persons')
-        .select('*')
-        .eq('family_tree_id', currentFamilyTreeId);
-
-      if (personsError) {
-        console.error('Error loading persons:', personsError);
-        return;
-      }
+      const personsQuery = query(
+        collection(db, 'persons'),
+        where('familyTreeId', '==', currentFamilyTreeId)
+      );
+      const personsSnapshot = await getDocs(personsQuery);
 
       // Load all relationships for the family tree
-      const { data: relationshipsData, error: relError } = await supabase
-        .from('relationships')
-        .select('*')
-        .eq('family_tree_id', currentFamilyTreeId);
+      const relQuery = query(
+        collection(db, 'relationships'),
+        where('familyTreeId', '==', currentFamilyTreeId)
+      );
+      const relSnapshot = await getDocs(relQuery);
 
-      if (relError) {
-        console.error('Error loading relationships:', relError);
-      }
-
-      const relationships = relationshipsData || [];
+      const relationships = relSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
 
       // Convert to Person records
       const persons: Record<string, Person> = {};
-      personsData?.forEach(row => {
-        persons[row.id] = dbRowToPerson(row, relationships);
+      personsSnapshot.docs.forEach(docSnap => {
+        persons[docSnap.id] = docToPerson(docSnap.data(), docSnap.id, relationships);
       });
 
       set({ persons });
@@ -462,31 +475,24 @@ export const useStore = create<AppState>()((set, get) => ({
 
     try {
       // Insert person
-      const { data: newPerson, error } = await supabase
-        .from('persons')
-        .insert({
-          family_tree_id: currentFamilyTreeId,
-          first_name: personData.firstName,
-          last_name: personData.lastName || '',
-          nickname: personData.nickname,
-          gender: personData.gender,
-          birth_date: personData.birthDate,
-          birth_place: personData.birthPlace,
-          death_date: personData.deathDate,
-          death_place: personData.deathPlace,
-          is_living: personData.isLiving ?? true,
-          profile_photo: personData.profilePhoto,
-          bio: personData.bio,
-          occupation: personData.occupation,
-          created_by: currentUser.id,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Error adding person:', error);
-        return null;
-      }
+      const personRef = await addDoc(collection(db, 'persons'), {
+        familyTreeId: currentFamilyTreeId,
+        firstName: personData.firstName,
+        lastName: personData.lastName || '',
+        nickname: personData.nickname || null,
+        gender: personData.gender || null,
+        birthDate: personData.birthDate || null,
+        birthPlace: personData.birthPlace || null,
+        deathDate: personData.deathDate || null,
+        deathPlace: personData.deathPlace || null,
+        isLiving: personData.isLiving ?? true,
+        profilePhoto: personData.profilePhoto || null,
+        bio: personData.bio || null,
+        occupation: personData.occupation || null,
+        createdBy: currentUser.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
       // Insert relationships
       const relationshipsToInsert: any[] = [];
@@ -495,21 +501,23 @@ export const useStore = create<AppState>()((set, get) => ({
       if (personData.parentRelationships) {
         personData.parentRelationships.forEach(rel => {
           relationshipsToInsert.push({
-            family_tree_id: currentFamilyTreeId,
-            person_id: newPerson.id,
-            related_person_id: rel.personId,
-            relationship_type: 'parent',
+            familyTreeId: currentFamilyTreeId,
+            personId: personRef.id,
+            relatedPersonId: rel.personId,
+            relationshipType: 'parent',
             subtype: rel.type,
+            createdAt: serverTimestamp(),
           });
         });
       } else if (personData.parents) {
         personData.parents.forEach(parentId => {
           relationshipsToInsert.push({
-            family_tree_id: currentFamilyTreeId,
-            person_id: newPerson.id,
-            related_person_id: parentId,
-            relationship_type: 'parent',
+            familyTreeId: currentFamilyTreeId,
+            personId: personRef.id,
+            relatedPersonId: parentId,
+            relationshipType: 'parent',
             subtype: 'biological',
+            createdAt: serverTimestamp(),
           });
         });
       }
@@ -518,46 +526,51 @@ export const useStore = create<AppState>()((set, get) => ({
       if (personData.spouseRelationships) {
         personData.spouseRelationships.forEach(rel => {
           relationshipsToInsert.push({
-            family_tree_id: currentFamilyTreeId,
-            person_id: newPerson.id,
-            related_person_id: rel.personId,
-            relationship_type: 'spouse',
+            familyTreeId: currentFamilyTreeId,
+            personId: personRef.id,
+            relatedPersonId: rel.personId,
+            relationshipType: 'spouse',
             subtype: rel.status,
+            createdAt: serverTimestamp(),
           });
           // Also add reciprocal relationship
           relationshipsToInsert.push({
-            family_tree_id: currentFamilyTreeId,
-            person_id: rel.personId,
-            related_person_id: newPerson.id,
-            relationship_type: 'spouse',
+            familyTreeId: currentFamilyTreeId,
+            personId: rel.personId,
+            relatedPersonId: personRef.id,
+            relationshipType: 'spouse',
             subtype: rel.status,
+            createdAt: serverTimestamp(),
           });
         });
       } else if (personData.spouseId) {
         relationshipsToInsert.push({
-          family_tree_id: currentFamilyTreeId,
-          person_id: newPerson.id,
-          related_person_id: personData.spouseId,
-          relationship_type: 'spouse',
+          familyTreeId: currentFamilyTreeId,
+          personId: personRef.id,
+          relatedPersonId: personData.spouseId,
+          relationshipType: 'spouse',
           subtype: 'current',
+          createdAt: serverTimestamp(),
         });
         relationshipsToInsert.push({
-          family_tree_id: currentFamilyTreeId,
-          person_id: personData.spouseId,
-          related_person_id: newPerson.id,
-          relationship_type: 'spouse',
+          familyTreeId: currentFamilyTreeId,
+          personId: personData.spouseId,
+          relatedPersonId: personRef.id,
+          relationshipType: 'spouse',
           subtype: 'current',
+          createdAt: serverTimestamp(),
         });
       }
 
-      if (relationshipsToInsert.length > 0) {
-        await supabase.from('relationships').insert(relationshipsToInsert);
+      // Add all relationships
+      for (const rel of relationshipsToInsert) {
+        await addDoc(collection(db, 'relationships'), rel);
       }
 
       // Reload all persons to get updated relationships
       await get().loadPersons();
 
-      return get().persons[newPerson.id];
+      return get().persons[personRef.id];
     } catch (error) {
       console.error('Error adding person:', error);
       return null;
@@ -570,84 +583,79 @@ export const useStore = create<AppState>()((set, get) => ({
 
     try {
       // Update person data
-      const dbUpdates: any = {};
-      if (updates.firstName !== undefined) dbUpdates.first_name = updates.firstName;
-      if (updates.lastName !== undefined) dbUpdates.last_name = updates.lastName;
+      const dbUpdates: any = { updatedAt: serverTimestamp() };
+      if (updates.firstName !== undefined) dbUpdates.firstName = updates.firstName;
+      if (updates.lastName !== undefined) dbUpdates.lastName = updates.lastName;
       if (updates.nickname !== undefined) dbUpdates.nickname = updates.nickname;
       if (updates.gender !== undefined) dbUpdates.gender = updates.gender;
-      if (updates.birthDate !== undefined) dbUpdates.birth_date = updates.birthDate;
-      if (updates.birthPlace !== undefined) dbUpdates.birth_place = updates.birthPlace;
-      if (updates.deathDate !== undefined) dbUpdates.death_date = updates.deathDate;
-      if (updates.deathPlace !== undefined) dbUpdates.death_place = updates.deathPlace;
-      if (updates.isLiving !== undefined) dbUpdates.is_living = updates.isLiving;
-      if (updates.profilePhoto !== undefined) dbUpdates.profile_photo = updates.profilePhoto;
+      if (updates.birthDate !== undefined) dbUpdates.birthDate = updates.birthDate;
+      if (updates.birthPlace !== undefined) dbUpdates.birthPlace = updates.birthPlace;
+      if (updates.deathDate !== undefined) dbUpdates.deathDate = updates.deathDate;
+      if (updates.deathPlace !== undefined) dbUpdates.deathPlace = updates.deathPlace;
+      if (updates.isLiving !== undefined) dbUpdates.isLiving = updates.isLiving;
+      if (updates.profilePhoto !== undefined) dbUpdates.profilePhoto = updates.profilePhoto;
       if (updates.bio !== undefined) dbUpdates.bio = updates.bio;
       if (updates.occupation !== undefined) dbUpdates.occupation = updates.occupation;
 
-      if (Object.keys(dbUpdates).length > 0) {
-        const { error } = await supabase
-          .from('persons')
-          .update(dbUpdates)
-          .eq('id', id);
-
-        if (error) {
-          console.error('Error updating person:', error);
-          return;
-        }
-      }
+      await updateDoc(doc(db, 'persons', id), dbUpdates);
 
       // Handle relationship updates
       if (updates.spouseRelationships !== undefined || updates.parentRelationships !== undefined) {
         // Delete existing relationships for this person
-        await supabase
-          .from('relationships')
-          .delete()
-          .eq('person_id', id);
+        const existingRelQuery = query(
+          collection(db, 'relationships'),
+          where('personId', '==', id)
+        );
+        const existingRels = await getDocs(existingRelQuery);
+        for (const relDoc of existingRels.docs) {
+          await deleteDoc(relDoc.ref);
+        }
 
         // Also delete reciprocal spouse relationships
-        await supabase
-          .from('relationships')
-          .delete()
-          .eq('related_person_id', id)
-          .eq('relationship_type', 'spouse');
-
-        const relationshipsToInsert: any[] = [];
+        const reciprocalQuery = query(
+          collection(db, 'relationships'),
+          where('relatedPersonId', '==', id),
+          where('relationshipType', '==', 'spouse')
+        );
+        const reciprocalRels = await getDocs(reciprocalQuery);
+        for (const relDoc of reciprocalRels.docs) {
+          await deleteDoc(relDoc.ref);
+        }
 
         // Add parent relationships
         if (updates.parentRelationships) {
-          updates.parentRelationships.forEach(rel => {
-            relationshipsToInsert.push({
-              family_tree_id: currentFamilyTreeId,
-              person_id: id,
-              related_person_id: rel.personId,
-              relationship_type: 'parent',
+          for (const rel of updates.parentRelationships) {
+            await addDoc(collection(db, 'relationships'), {
+              familyTreeId: currentFamilyTreeId,
+              personId: id,
+              relatedPersonId: rel.personId,
+              relationshipType: 'parent',
               subtype: rel.type,
+              createdAt: serverTimestamp(),
             });
-          });
+          }
         }
 
         // Add spouse relationships (bidirectional)
         if (updates.spouseRelationships) {
-          updates.spouseRelationships.forEach(rel => {
-            relationshipsToInsert.push({
-              family_tree_id: currentFamilyTreeId,
-              person_id: id,
-              related_person_id: rel.personId,
-              relationship_type: 'spouse',
+          for (const rel of updates.spouseRelationships) {
+            await addDoc(collection(db, 'relationships'), {
+              familyTreeId: currentFamilyTreeId,
+              personId: id,
+              relatedPersonId: rel.personId,
+              relationshipType: 'spouse',
               subtype: rel.status,
+              createdAt: serverTimestamp(),
             });
-            relationshipsToInsert.push({
-              family_tree_id: currentFamilyTreeId,
-              person_id: rel.personId,
-              related_person_id: id,
-              relationship_type: 'spouse',
+            await addDoc(collection(db, 'relationships'), {
+              familyTreeId: currentFamilyTreeId,
+              personId: rel.personId,
+              relatedPersonId: id,
+              relationshipType: 'spouse',
               subtype: rel.status,
+              createdAt: serverTimestamp(),
             });
-          });
-        }
-
-        if (relationshipsToInsert.length > 0) {
-          await supabase.from('relationships').insert(relationshipsToInsert);
+          }
         }
       }
 
@@ -660,14 +668,16 @@ export const useStore = create<AppState>()((set, get) => ({
 
   deletePerson: async (id) => {
     try {
-      const { error } = await supabase
-        .from('persons')
-        .delete()
-        .eq('id', id);
+      await deleteDoc(doc(db, 'persons', id));
 
-      if (error) {
-        console.error('Error deleting person:', error);
-        return;
+      // Delete related relationships
+      const relQuery1 = query(collection(db, 'relationships'), where('personId', '==', id));
+      const relQuery2 = query(collection(db, 'relationships'), where('relatedPersonId', '==', id));
+
+      const [rels1, rels2] = await Promise.all([getDocs(relQuery1), getDocs(relQuery2)]);
+
+      for (const relDoc of [...rels1.docs, ...rels2.docs]) {
+        await deleteDoc(relDoc.ref);
       }
 
       // Reload persons
@@ -686,12 +696,13 @@ export const useStore = create<AppState>()((set, get) => ({
     if (!currentFamilyTreeId) return;
 
     try {
-      await supabase.from('relationships').insert({
-        family_tree_id: currentFamilyTreeId,
-        person_id: childId,
-        related_person_id: parentId,
-        relationship_type: 'parent',
+      await addDoc(collection(db, 'relationships'), {
+        familyTreeId: currentFamilyTreeId,
+        personId: childId,
+        relatedPersonId: parentId,
+        relationshipType: 'parent',
         subtype: 'biological',
+        createdAt: serverTimestamp(),
       });
 
       await get().loadPersons();
@@ -705,22 +716,23 @@ export const useStore = create<AppState>()((set, get) => ({
     if (!currentFamilyTreeId) return;
 
     try {
-      await supabase.from('relationships').insert([
-        {
-          family_tree_id: currentFamilyTreeId,
-          person_id: person1Id,
-          related_person_id: person2Id,
-          relationship_type: 'spouse',
-          subtype: 'current',
-        },
-        {
-          family_tree_id: currentFamilyTreeId,
-          person_id: person2Id,
-          related_person_id: person1Id,
-          relationship_type: 'spouse',
-          subtype: 'current',
-        },
-      ]);
+      await addDoc(collection(db, 'relationships'), {
+        familyTreeId: currentFamilyTreeId,
+        personId: person1Id,
+        relatedPersonId: person2Id,
+        relationshipType: 'spouse',
+        subtype: 'current',
+        createdAt: serverTimestamp(),
+      });
+
+      await addDoc(collection(db, 'relationships'), {
+        familyTreeId: currentFamilyTreeId,
+        personId: person2Id,
+        relatedPersonId: person1Id,
+        relationshipType: 'spouse',
+        subtype: 'current',
+        createdAt: serverTimestamp(),
+      });
 
       await get().loadPersons();
     } catch (error) {
@@ -733,12 +745,13 @@ export const useStore = create<AppState>()((set, get) => ({
     if (!currentFamilyTreeId) return;
 
     try {
-      await supabase.from('relationships').insert({
-        family_tree_id: currentFamilyTreeId,
-        person_id: childId,
-        related_person_id: parentId,
-        relationship_type: 'parent',
+      await addDoc(collection(db, 'relationships'), {
+        familyTreeId: currentFamilyTreeId,
+        personId: childId,
+        relatedPersonId: parentId,
+        relationshipType: 'parent',
         subtype: 'biological',
+        createdAt: serverTimestamp(),
       });
 
       await get().loadPersons();
@@ -748,33 +761,26 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   addComment: async (personId, content) => {
-    const { currentUser } = get();
-    if (!currentUser) return;
+    const { currentUser, currentFamilyTreeId } = get();
+    if (!currentUser || !currentFamilyTreeId) return;
 
     try {
-      const { data, error } = await supabase
-        .from('comments')
-        .insert({
-          person_id: personId,
-          author_id: currentUser.id,
-          author_name: currentUser.displayName,
-          content,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Error adding comment:', error);
-        return;
-      }
+      const commentRef = await addDoc(collection(db, 'comments'), {
+        personId,
+        familyTreeId: currentFamilyTreeId,
+        authorId: currentUser.id,
+        authorName: currentUser.displayName,
+        content,
+        createdAt: serverTimestamp(),
+      });
 
       const comment: Comment = {
-        id: data.id,
-        personId: data.person_id,
-        authorId: data.author_id,
-        authorName: data.author_name,
-        content: data.content,
-        createdAt: data.created_at,
+        id: commentRef.id,
+        personId,
+        authorId: currentUser.id,
+        authorName: currentUser.displayName,
+        content,
+        createdAt: new Date().toISOString(),
       };
 
       set((state) => ({
@@ -791,26 +797,29 @@ export const useStore = create<AppState>()((set, get) => ({
   getComments: (personId) => get().comments[personId] || [],
 
   loadComments: async (personId) => {
+    const { currentFamilyTreeId } = get();
+    if (!currentFamilyTreeId) return;
+
     try {
-      const { data, error } = await supabase
-        .from('comments')
-        .select('*')
-        .eq('person_id', personId)
-        .order('created_at', { ascending: true });
+      const commentsQuery = query(
+        collection(db, 'comments'),
+        where('personId', '==', personId),
+        where('familyTreeId', '==', currentFamilyTreeId),
+        orderBy('createdAt', 'asc')
+      );
+      const commentsSnapshot = await getDocs(commentsQuery);
 
-      if (error) {
-        console.error('Error loading comments:', error);
-        return;
-      }
-
-      const comments: Comment[] = data.map(row => ({
-        id: row.id,
-        personId: row.person_id,
-        authorId: row.author_id,
-        authorName: row.author_name,
-        content: row.content,
-        createdAt: row.created_at,
-      }));
+      const comments: Comment[] = commentsSnapshot.docs.map(docSnap => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          personId: data.personId,
+          authorId: data.authorId,
+          authorName: data.authorName,
+          content: data.content,
+          createdAt: timestampToString(data.createdAt),
+        };
+      });
 
       set((state) => ({
         comments: {
@@ -824,36 +833,29 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   addStory: async (personId, content, authorId) => {
-    const { currentUser } = get();
-    if (!currentUser) return;
+    const { currentUser, currentFamilyTreeId } = get();
+    if (!currentUser || !currentFamilyTreeId) return;
 
     try {
-      const { data, error } = await supabase
-        .from('stories')
-        .insert({
-          person_id: personId,
-          author_id: authorId || currentUser.id,
-          author_name: currentUser.displayName,
-          title: 'Story',
-          content,
-          is_featured: false,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Error adding story:', error);
-        return;
-      }
+      const storyRef = await addDoc(collection(db, 'stories'), {
+        personId,
+        familyTreeId: currentFamilyTreeId,
+        authorId: authorId || currentUser.id,
+        authorName: currentUser.displayName,
+        title: 'Story',
+        content,
+        isFeatured: false,
+        createdAt: serverTimestamp(),
+      });
 
       const story: Story = {
-        id: data.id,
-        personId: data.person_id,
-        authorId: data.author_id,
-        authorName: data.author_name,
-        content: data.content,
-        isFeatured: data.is_featured,
-        createdAt: data.created_at,
+        id: storyRef.id,
+        personId,
+        authorId: authorId || currentUser.id,
+        authorName: currentUser.displayName,
+        content,
+        isFeatured: false,
+        createdAt: new Date().toISOString(),
       };
 
       set((state) => ({
@@ -870,27 +872,30 @@ export const useStore = create<AppState>()((set, get) => ({
   getStories: (personId) => get().stories[personId] || [],
 
   loadStories: async (personId) => {
+    const { currentFamilyTreeId } = get();
+    if (!currentFamilyTreeId) return;
+
     try {
-      const { data, error } = await supabase
-        .from('stories')
-        .select('*')
-        .eq('person_id', personId)
-        .order('created_at', { ascending: true });
+      const storiesQuery = query(
+        collection(db, 'stories'),
+        where('personId', '==', personId),
+        where('familyTreeId', '==', currentFamilyTreeId),
+        orderBy('createdAt', 'asc')
+      );
+      const storiesSnapshot = await getDocs(storiesQuery);
 
-      if (error) {
-        console.error('Error loading stories:', error);
-        return;
-      }
-
-      const stories: Story[] = data.map(row => ({
-        id: row.id,
-        personId: row.person_id,
-        authorId: row.author_id,
-        authorName: row.author_name,
-        content: row.content,
-        isFeatured: row.is_featured,
-        createdAt: row.created_at,
-      }));
+      const stories: Story[] = storiesSnapshot.docs.map(docSnap => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          personId: data.personId,
+          authorId: data.authorId,
+          authorName: data.authorName,
+          content: data.content,
+          isFeatured: data.isFeatured,
+          createdAt: timestampToString(data.createdAt),
+        };
+      });
 
       set((state) => ({
         stories: {
@@ -904,35 +909,28 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   addPhoto: async (personId, photoUrl, caption) => {
-    const { currentUser } = get();
-    if (!currentUser) return;
+    const { currentUser, currentFamilyTreeId } = get();
+    if (!currentUser || !currentFamilyTreeId) return;
 
     try {
-      const { data, error } = await supabase
-        .from('person_photos')
-        .insert({
-          person_id: personId,
-          url: photoUrl,
-          caption,
-          uploaded_by: currentUser.id,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Error adding photo:', error);
-        return;
-      }
+      const photoRef = await addDoc(collection(db, 'personPhotos'), {
+        personId,
+        familyTreeId: currentFamilyTreeId,
+        url: photoUrl,
+        caption: caption || null,
+        uploadedBy: currentUser.id,
+        uploadedAt: serverTimestamp(),
+      });
 
       // Update local state
       const photo: Photo = {
-        id: data.id,
-        url: data.url,
-        uri: data.url,
-        caption: data.caption,
+        id: photoRef.id,
+        url: photoUrl,
+        uri: photoUrl,
+        caption: caption || undefined,
         taggedPersonIds: [personId],
-        uploadedAt: data.uploaded_at,
-        uploadedBy: data.uploaded_by,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: currentUser.id,
       };
 
       set((state) => {

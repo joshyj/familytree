@@ -5,15 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:emulator": "VITE_USE_FIREBASE_EMULATOR=true vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "emulators": "npx firebase emulators:start",
+    "emulators:export": "npx firebase emulators:export ./emulator-data",
     "test": "playwright test",
-    "test:headed": "playwright test --headed"
+    "test:headed": "playwright test --headed",
+    "test:emulator": "VITE_USE_FIREBASE_EMULATOR=true playwright test"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.90.1",
     "date-fns": "^4.1.0",
+    "firebase": "^12.7.0",
     "lucide-react": "^0.460.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -25,6 +29,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "firebase-tools": "^15.2.1",
     "typescript": "~5.6.2",
     "vite": "^6.0.1",
     "vite-plugin-pwa": "^0.21.1"
