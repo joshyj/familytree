@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Camera, ImagePlus } from 'lucide-react';
+import { ArrowLeft, Save, Camera, ImagePlus, Plus, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { getFullName } from '../utils/helpers';
-import { Person } from '../types';
+import { Person, SpouseRelationship, ParentRelationship, SpouseStatus, ParentType } from '../types';
 import styles from './PersonEdit.module.css';
 
 // Get all descendants of a person (children, grandchildren, etc.) to prevent cycles
@@ -52,11 +52,21 @@ export default function PersonEdit() {
     gender: '' as '' | 'male' | 'female' | 'other',
     bio: '',
     spouseId: '',
+    spouseRelationships: [] as SpouseRelationship[],
+    parentRelationships: [] as ParentRelationship[],
     parents: [] as string[],
   });
 
   useEffect(() => {
     if (existingPerson) {
+      // Build parent relationships from existing parents
+      const parentRels: ParentRelationship[] = existingPerson.parentRelationships ||
+        existingPerson.parents.map(parentId => ({ personId: parentId, type: 'biological' as ParentType }));
+
+      // Build spouse relationships
+      const spouseRels: SpouseRelationship[] = existingPerson.spouseRelationships ||
+        (existingPerson.spouseId ? [{ personId: existingPerson.spouseId, status: 'current' as SpouseStatus }] : []);
+
       setFormData({
         firstName: existingPerson.firstName,
         lastName: existingPerson.lastName,
@@ -67,6 +77,8 @@ export default function PersonEdit() {
         gender: existingPerson.gender || '',
         bio: existingPerson.bio || '',
         spouseId: existingPerson.spouseId || '',
+        spouseRelationships: spouseRels,
+        parentRelationships: parentRels,
         parents: existingPerson.parents,
       });
     }
@@ -86,14 +98,75 @@ export default function PersonEdit() {
   };
 
   const handleParentToggle = (personId: string) => {
+    setFormData((prev) => {
+      const isSelected = prev.parentRelationships.some(r => r.personId === personId);
+      if (isSelected) {
+        return {
+          ...prev,
+          parents: prev.parents.filter((id) => id !== personId),
+          parentRelationships: prev.parentRelationships.filter(r => r.personId !== personId),
+        };
+      } else if (prev.parentRelationships.length < 4) {
+        // Allow up to 4 parents (2 biological + 2 step)
+        return {
+          ...prev,
+          parents: [...prev.parents, personId],
+          parentRelationships: [...prev.parentRelationships, { personId, type: 'biological' as ParentType }],
+        };
+      }
+      return prev;
+    });
+  };
+
+  const handleParentTypeChange = (personId: string, type: ParentType) => {
     setFormData((prev) => ({
       ...prev,
-      parents: prev.parents.includes(personId)
-        ? prev.parents.filter((id) => id !== personId)
-        : prev.parents.length < 2
-        ? [...prev.parents, personId]
-        : prev.parents,
+      parentRelationships: prev.parentRelationships.map(r =>
+        r.personId === personId ? { ...r, type } : r
+      ),
     }));
+  };
+
+  const handleAddSpouse = (personId: string) => {
+    if (!personId || formData.spouseRelationships.some(r => r.personId === personId)) return;
+    setFormData((prev) => ({
+      ...prev,
+      spouseRelationships: [...prev.spouseRelationships, { personId, status: 'current' as SpouseStatus }],
+      // Set as current spouse if it's the first or marked as current
+      spouseId: prev.spouseRelationships.length === 0 ? personId : prev.spouseId,
+    }));
+  };
+
+  const handleRemoveSpouse = (personId: string) => {
+    setFormData((prev) => {
+      const newRels = prev.spouseRelationships.filter(r => r.personId !== personId);
+      const currentSpouse = newRels.find(r => r.status === 'current');
+      return {
+        ...prev,
+        spouseRelationships: newRels,
+        spouseId: currentSpouse?.personId || '',
+      };
+    });
+  };
+
+  const handleSpouseStatusChange = (personId: string, status: SpouseStatus) => {
+    setFormData((prev) => {
+      const newRels = prev.spouseRelationships.map(r => {
+        if (r.personId === personId) {
+          return { ...r, status };
+        }
+        // If setting someone as current, set others to divorced
+        if (status === 'current' && r.status === 'current') {
+          return { ...r, status: 'divorced' as SpouseStatus };
+        }
+        return r;
+      });
+      return {
+        ...prev,
+        spouseRelationships: newRels,
+        spouseId: status === 'current' ? personId : (newRels.find(r => r.status === 'current')?.personId || ''),
+      };
+    });
   };
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -127,6 +200,8 @@ export default function PersonEdit() {
         gender: formData.gender || undefined,
         bio: formData.bio.trim() || undefined,
         spouseId: formData.spouseId || undefined,
+        spouseRelationships: formData.spouseRelationships,
+        parentRelationships: formData.parentRelationships,
         parents: formData.parents,
       });
       navigate(`/person/${newPerson.id}`);
@@ -141,14 +216,18 @@ export default function PersonEdit() {
         gender: formData.gender || undefined,
         bio: formData.bio.trim() || undefined,
         spouseId: formData.spouseId || undefined,
+        spouseRelationships: formData.spouseRelationships,
+        parentRelationships: formData.parentRelationships,
         parents: formData.parents,
       });
       navigate(`/person/${existingPerson.id}`);
     }
   };
 
+  // For spouse selection, allow any person except self and those already in relationships
+  const selectedSpouseIds = formData.spouseRelationships.map(r => r.personId);
   const availableSpouses = persons.filter(
-    (p) => p.id !== id && (!p.spouseId || p.spouseId === id)
+    (p) => p.id !== id && !selectedSpouseIds.includes(p.id)
   );
 
   // Get all descendants to prevent cycle in parent-child hierarchy
@@ -323,41 +402,122 @@ export default function PersonEdit() {
         <div className={styles.section}>
           <h2 className={styles.sectionTitle}>Relationships</h2>
 
+          {/* Spouse Relationships */}
           <div className={styles.field}>
-            <label>Spouse</label>
-            <select name="spouseId" value={formData.spouseId} onChange={handleChange}>
-              <option value="">No spouse selected</option>
-              {availableSpouses.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {getFullName(p.firstName, p.lastName)}
-                </option>
-              ))}
-            </select>
+            <label>Spouses / Partners</label>
+            {formData.spouseRelationships.length > 0 && (
+              <div className={styles.relationshipList}>
+                {formData.spouseRelationships.map((rel) => {
+                  const spouse = persons.find(p => p.id === rel.personId);
+                  if (!spouse) return null;
+                  return (
+                    <div key={rel.personId} className={styles.relationshipRow}>
+                      <span className={styles.relationshipName}>
+                        {getFullName(spouse.firstName, spouse.lastName)}
+                      </span>
+                      <select
+                        value={rel.status}
+                        onChange={(e) => handleSpouseStatusChange(rel.personId, e.target.value as SpouseStatus)}
+                        className={styles.relationshipSelect}
+                      >
+                        <option value="current">Current</option>
+                        <option value="divorced">Divorced</option>
+                        <option value="widowed">Widowed</option>
+                        <option value="separated">Separated</option>
+                      </select>
+                      <button
+                        type="button"
+                        className={styles.removeButton}
+                        onClick={() => handleRemoveSpouse(rel.personId)}
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {availableSpouses.length > 0 && (
+              <div className={styles.addRelationship}>
+                <select
+                  id="addSpouse"
+                  defaultValue=""
+                  onChange={(e) => {
+                    handleAddSpouse(e.target.value);
+                    e.target.value = '';
+                  }}
+                >
+                  <option value="" disabled>Add spouse/partner...</option>
+                  {availableSpouses.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {getFullName(p.firstName, p.lastName)}
+                    </option>
+                  ))}
+                </select>
+                <Plus size={18} className={styles.addIcon} />
+              </div>
+            )}
           </div>
 
+          {/* Parent Relationships */}
           <div className={styles.field}>
-            <label>Parents (select up to 2)</label>
-            <div className={styles.checkboxList}>
-              {availableParents.map((p) => (
-                <label key={p.id} className={styles.checkboxItem}>
-                  <input
-                    type="checkbox"
-                    checked={formData.parents.includes(p.id)}
-                    onChange={() => handleParentToggle(p.id)}
-                    disabled={
-                      !formData.parents.includes(p.id) &&
-                      formData.parents.length >= 2
-                    }
-                  />
-                  <span>{getFullName(p.firstName, p.lastName)}</span>
-                </label>
-              ))}
-              {availableParents.length === 0 && (
-                <p className={styles.noOptions}>
-                  Add more people to set relationships
-                </p>
-              )}
-            </div>
+            <label>Parents (up to 4 including step-parents)</label>
+            {formData.parentRelationships.length > 0 && (
+              <div className={styles.relationshipList}>
+                {formData.parentRelationships.map((rel) => {
+                  const parent = persons.find(p => p.id === rel.personId);
+                  if (!parent) return null;
+                  return (
+                    <div key={rel.personId} className={styles.relationshipRow}>
+                      <span className={styles.relationshipName}>
+                        {getFullName(parent.firstName, parent.lastName)}
+                      </span>
+                      <select
+                        value={rel.type}
+                        onChange={(e) => handleParentTypeChange(rel.personId, e.target.value as ParentType)}
+                        className={styles.relationshipSelect}
+                      >
+                        <option value="biological">Biological</option>
+                        <option value="step">Step-parent</option>
+                        <option value="adoptive">Adoptive</option>
+                      </select>
+                      <button
+                        type="button"
+                        className={styles.removeButton}
+                        onClick={() => handleParentToggle(rel.personId)}
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {availableParents.length > 0 && formData.parentRelationships.length < 4 && (
+              <div className={styles.addRelationship}>
+                <select
+                  id="addParent"
+                  defaultValue=""
+                  onChange={(e) => {
+                    handleParentToggle(e.target.value);
+                    e.target.value = '';
+                  }}
+                >
+                  <option value="" disabled>Add parent...</option>
+                  {availableParents.filter(p => !formData.parentRelationships.some(r => r.personId === p.id)).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {getFullName(p.firstName, p.lastName)}
+                    </option>
+                  ))}
+                </select>
+                <Plus size={18} className={styles.addIcon} />
+              </div>
+            )}
+            {availableParents.length === 0 && formData.parentRelationships.length === 0 && (
+              <p className={styles.noOptions}>
+                Add more people to set relationships
+              </p>
+            )}
           </div>
         </div>
 

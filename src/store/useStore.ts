@@ -155,6 +155,8 @@ export const useStore = create<AppState>()(
           motherId: personData.motherId,
           spouseId: personData.spouseId,
           spouseIds: personData.spouseIds || [],
+          spouseRelationships: personData.spouseRelationships || [],
+          parentRelationships: personData.parentRelationships || [],
           children: personData.children || [],
           childrenIds: personData.childrenIds || [],
           parents: personData.parents || [],

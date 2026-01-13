@@ -569,9 +569,8 @@ test.describe('FamilyRoots App - Full Test Suite', () => {
     await page.fill('input[name="firstName"]', 'Child');
     await page.fill('input[name="lastName"]', 'Person');
 
-    // Select Parent Person as a parent - click the checkbox input directly
-    const parentCheckbox = page.locator('input[type="checkbox"]').first();
-    await parentCheckbox.check();
+    // Select Parent Person as a parent using the dropdown
+    await page.selectOption('select#addParent', { label: 'Parent Person' });
 
     // Submit the form
     await page.locator('button[type="submit"]').click();
@@ -589,10 +588,11 @@ test.describe('FamilyRoots App - Full Test Suite', () => {
     await page.locator('header button').nth(1).click();
     await expect(page.locator('h1')).toContainText('Edit Person', { timeout: 5000 });
 
-    // Verify Child Person is NOT in the parents checkbox list (cycle prevention)
-    // The child should not appear as an available parent option
-    const childInParentsList = page.locator('label').filter({ hasText: 'Child Person' });
-    await expect(childInParentsList).toHaveCount(0);
+    // Verify Child Person is NOT in the parents dropdown (cycle prevention)
+    // The dropdown for adding parents should not have Child Person as an option
+    const parentDropdown = page.locator('select#addParent');
+    const options = await parentDropdown.locator('option').allTextContents();
+    expect(options).not.toContain('Child Person');
   });
 
   test('TC-CYCLE-002: Spouse Excluded from Parents List', async ({ page }) => {
@@ -624,11 +624,278 @@ test.describe('FamilyRoots App - Full Test Suite', () => {
     await page.fill('input[name="firstName"]', 'Main');
     await page.fill('input[name="lastName"]', 'Person');
 
-    // Select Spouse Person as spouse
-    await page.selectOption('select[name="spouseId"]', { label: 'Spouse Person' });
+    // Select Spouse Person as spouse using the new dropdown
+    await page.selectOption('select#addSpouse', { label: 'Spouse Person' });
 
-    // Verify Spouse Person is NOT in the parents checkbox list
-    const spouseInParentsList = page.locator('label').filter({ hasText: 'Spouse Person' });
-    await expect(spouseInParentsList).toHaveCount(0);
+    // Verify Spouse Person is NOT in the parents dropdown list
+    // After selecting as spouse, they should not appear in parents dropdown
+    const parentDropdown = page.locator('select#addParent');
+    const options = await parentDropdown.locator('option').allTextContents();
+    expect(options).not.toContain('Spouse Person');
+  });
+
+  test('TC-REL-001: Add Multiple Spouses with Different Statuses', async ({ page }) => {
+    const testEmail = `multi-spouse${Date.now()}@example.com`;
+
+    // Register
+    await page.goto('/register');
+    await page.fill('input[placeholder="Full Name"]', testName);
+    await page.fill('input[placeholder="Email"]', testEmail);
+    await page.fill('input[placeholder*="Password"]', testPassword);
+    await page.fill('input[placeholder="Confirm Password"]', testPassword);
+    await page.click('button[type="submit"]');
+    await expect(page.locator('text=Welcome back')).toBeVisible({ timeout: 5000 });
+
+    // Add first spouse
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'First');
+    await page.fill('input[name="lastName"]', 'Spouse');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('text=First Spouse')).toBeVisible({ timeout: 5000 });
+
+    // Add second spouse
+    await page.click('nav >> text=Home');
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'Second');
+    await page.fill('input[name="lastName"]', 'Spouse');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('text=Second Spouse')).toBeVisible({ timeout: 5000 });
+
+    // Add main person with both spouses
+    await page.click('nav >> text=Home');
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'Main');
+    await page.fill('input[name="lastName"]', 'Person');
+
+    // Add first spouse
+    await page.selectOption('select#addSpouse', { label: 'First Spouse' });
+
+    // Verify first spouse was added to the relationship list (at least 1 row exists)
+    await expect(page.locator('[class*="relationshipRow"]')).toHaveCount(1, { timeout: 5000 });
+
+    // Add second spouse
+    await page.selectOption('select#addSpouse', { label: 'Second Spouse' });
+
+    // Verify second spouse was added (now 2 rows)
+    await expect(page.locator('[class*="relationshipRow"]')).toHaveCount(2, { timeout: 5000 });
+
+    // Change first spouse status to divorced (find the row containing First Spouse and its select)
+    const firstSpouseRow = page.locator('[class*="relationshipRow"]').filter({ hasText: 'First Spouse' });
+    await firstSpouseRow.locator('[class*="relationshipSelect"]').selectOption('divorced');
+
+    // Submit and verify
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('h1:has-text("Main Person")')).toBeVisible({ timeout: 5000 });
+  });
+
+  test('TC-REL-002: Add Step-Parent Relationship', async ({ page }) => {
+    const testEmail = `step-parent${Date.now()}@example.com`;
+
+    // Register
+    await page.goto('/register');
+    await page.fill('input[placeholder="Full Name"]', testName);
+    await page.fill('input[placeholder="Email"]', testEmail);
+    await page.fill('input[placeholder*="Password"]', testPassword);
+    await page.fill('input[placeholder="Confirm Password"]', testPassword);
+    await page.click('button[type="submit"]');
+    await expect(page.locator('text=Welcome back')).toBeVisible({ timeout: 5000 });
+
+    // Add biological parent
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'Bio');
+    await page.fill('input[name="lastName"]', 'Parent');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('text=Bio Parent')).toBeVisible({ timeout: 5000 });
+
+    // Add step parent
+    await page.click('nav >> text=Home');
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'Step');
+    await page.fill('input[name="lastName"]', 'Parent');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('text=Step Parent')).toBeVisible({ timeout: 5000 });
+
+    // Add child with both parents
+    await page.click('nav >> text=Home');
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'Child');
+    await page.fill('input[name="lastName"]', 'Person');
+
+    // Add biological parent
+    await page.selectOption('select#addParent', { label: 'Bio Parent' });
+
+    // Verify parent was added (1 row exists)
+    await expect(page.locator('[class*="relationshipRow"]')).toHaveCount(1, { timeout: 5000 });
+
+    // Add step parent
+    await page.selectOption('select#addParent', { label: 'Step Parent' });
+
+    // Verify second parent was added (now 2 rows)
+    await expect(page.locator('[class*="relationshipRow"]')).toHaveCount(2, { timeout: 5000 });
+
+    // Change step parent type to "step"
+    const stepParentRow = page.locator('[class*="relationshipRow"]').filter({ hasText: 'Step Parent' });
+    await stepParentRow.locator('[class*="relationshipSelect"]').selectOption('step');
+
+    // Submit
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('h1:has-text("Child Person")')).toBeVisible({ timeout: 5000 });
+
+    // Go to edit and verify the relationships are saved
+    await page.locator('header button').nth(1).click();
+    await expect(page.locator('h1')).toContainText('Edit Person', { timeout: 5000 });
+
+    // Verify Bio Parent is listed as biological
+    const bioParentRow = page.locator('[class*="relationshipRow"]').filter({ hasText: 'Bio Parent' });
+    await expect(bioParentRow.locator('[class*="relationshipSelect"]')).toHaveValue('biological');
+
+    // Verify Step Parent is listed as step
+    const stepParentRowVerify = page.locator('[class*="relationshipRow"]').filter({ hasText: 'Step Parent' });
+    await expect(stepParentRowVerify.locator('[class*="relationshipSelect"]')).toHaveValue('step');
+  });
+
+  test('TC-REL-003: Change Spouse Status to Ex', async ({ page }) => {
+    const testEmail = `ex-spouse${Date.now()}@example.com`;
+
+    // Register
+    await page.goto('/register');
+    await page.fill('input[placeholder="Full Name"]', testName);
+    await page.fill('input[placeholder="Email"]', testEmail);
+    await page.fill('input[placeholder*="Password"]', testPassword);
+    await page.fill('input[placeholder="Confirm Password"]', testPassword);
+    await page.click('button[type="submit"]');
+    await expect(page.locator('text=Welcome back')).toBeVisible({ timeout: 5000 });
+
+    // Add spouse
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'Ex');
+    await page.fill('input[name="lastName"]', 'Spouse');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('text=Ex Spouse')).toBeVisible({ timeout: 5000 });
+
+    // Add main person with spouse
+    await page.click('nav >> text=Home');
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'Main');
+    await page.fill('input[name="lastName"]', 'Person');
+
+    // Add spouse as current
+    await page.selectOption('select#addSpouse', { label: 'Ex Spouse' });
+
+    // Submit
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('h1:has-text("Main Person")')).toBeVisible({ timeout: 5000 });
+
+    // Edit and change to divorced
+    await page.locator('header button').nth(1).click();
+    await expect(page.locator('h1')).toContainText('Edit Person', { timeout: 5000 });
+
+    // Change status to divorced
+    const spouseRow = page.locator('[class*="relationshipRow"]').filter({ hasText: 'Ex Spouse' });
+    await spouseRow.locator('[class*="relationshipSelect"]').selectOption('divorced');
+
+    // Save changes
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('h1:has-text("Main Person")')).toBeVisible({ timeout: 5000 });
+
+    // Go to tree and verify ex-spouse is shown with broken heart icon
+    await page.click('nav >> text=Tree');
+    await expect(page.locator('h1')).toContainText('Family Tree', { timeout: 5000 });
+
+    // Both persons should be visible in the tree
+    await expect(page.locator('text=Main Person')).toBeVisible();
+    await expect(page.locator('text=Ex Spouse')).toBeVisible();
+  });
+
+  test('TC-REL-004: Remove Spouse from Relationship', async ({ page }) => {
+    const testEmail = `remove-spouse${Date.now()}@example.com`;
+
+    // Register
+    await page.goto('/register');
+    await page.fill('input[placeholder="Full Name"]', testName);
+    await page.fill('input[placeholder="Email"]', testEmail);
+    await page.fill('input[placeholder*="Password"]', testPassword);
+    await page.fill('input[placeholder="Confirm Password"]', testPassword);
+    await page.click('button[type="submit"]');
+    await expect(page.locator('text=Welcome back')).toBeVisible({ timeout: 5000 });
+
+    // Add spouse
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'Remove');
+    await page.fill('input[name="lastName"]', 'Me');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('text=Remove Me')).toBeVisible({ timeout: 5000 });
+
+    // Add main person with spouse
+    await page.click('nav >> text=Home');
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'Keep');
+    await page.fill('input[name="lastName"]', 'Person');
+
+    // Add spouse
+    await page.selectOption('select#addSpouse', { label: 'Remove Me' });
+
+    // Verify spouse was added (1 row exists)
+    await expect(page.locator('[class*="relationshipRow"]')).toHaveCount(1, { timeout: 5000 });
+
+    // Click remove button (X) for the spouse
+    const spouseRowToRemove = page.locator('[class*="relationshipRow"]').filter({ hasText: 'Remove Me' });
+    await spouseRowToRemove.locator('[class*="removeButton"]').click();
+
+    // Verify spouse is removed from the list (0 rows)
+    await expect(page.locator('[class*="relationshipRow"]')).toHaveCount(0, { timeout: 5000 });
+
+    // Verify they're back in the dropdown
+    const spouseDropdown = page.locator('select#addSpouse');
+    const options = await spouseDropdown.locator('option').allTextContents();
+    expect(options).toContain('Remove Me');
+  });
+
+  test('TC-REL-005: Add Adoptive Parent', async ({ page }) => {
+    const testEmail = `adoptive${Date.now()}@example.com`;
+
+    // Register
+    await page.goto('/register');
+    await page.fill('input[placeholder="Full Name"]', testName);
+    await page.fill('input[placeholder="Email"]', testEmail);
+    await page.fill('input[placeholder*="Password"]', testPassword);
+    await page.fill('input[placeholder="Confirm Password"]', testPassword);
+    await page.click('button[type="submit"]');
+    await expect(page.locator('text=Welcome back')).toBeVisible({ timeout: 5000 });
+
+    // Add adoptive parent
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'Adoptive');
+    await page.fill('input[name="lastName"]', 'Parent');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('text=Adoptive Parent')).toBeVisible({ timeout: 5000 });
+
+    // Add child with adoptive parent
+    await page.click('nav >> text=Home');
+    await page.locator('button').filter({ hasText: 'Add Person' }).click();
+    await page.fill('input[name="firstName"]', 'Adopted');
+    await page.fill('input[name="lastName"]', 'Child');
+
+    // Add parent and set as adoptive
+    await page.selectOption('select#addParent', { label: 'Adoptive Parent' });
+
+    // Verify parent was added (1 row exists)
+    await expect(page.locator('[class*="relationshipRow"]')).toHaveCount(1, { timeout: 5000 });
+
+    // Change to adoptive
+    const parentRow = page.locator('[class*="relationshipRow"]').filter({ hasText: 'Adoptive Parent' });
+    await parentRow.locator('[class*="relationshipSelect"]').selectOption('adoptive');
+
+    // Submit
+    await page.locator('button[type="submit"]').click();
+    await expect(page.locator('h1:has-text("Adopted Child")')).toBeVisible({ timeout: 5000 });
+
+    // Verify in edit view
+    await page.locator('header button').nth(1).click();
+    await expect(page.locator('h1')).toContainText('Edit Person', { timeout: 5000 });
+
+    // Verify parent is listed as adoptive
+    const adoptiveParentRow = page.locator('[class*="relationshipRow"]').filter({ hasText: 'Adoptive Parent' });
+    await expect(adoptiveParentRow.locator('[class*="relationshipSelect"]')).toHaveValue('adoptive');
   });
 });

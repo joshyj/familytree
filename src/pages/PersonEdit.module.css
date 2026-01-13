@@ -280,3 +280,102 @@
   flex: 1;
   margin-top: 0;
 }
+
+/* Relationship Management Styles */
+.relationshipList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.relationshipRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: white;
+  border: 2px solid var(--gray-200);
+  border-radius: 12px;
+}
+
+.relationshipName {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--gray-800);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relationshipSelect {
+  padding: 8px 12px;
+  border: 2px solid var(--gray-200);
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--gray-700);
+  background: var(--gray-50);
+  min-width: 100px;
+}
+
+.relationshipSelect:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.removeButton {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--gray-100);
+  border-radius: 8px;
+  color: var(--gray-500);
+  transition: background 0.2s, color 0.2s;
+}
+
+.removeButton:hover {
+  background: #fee2e2;
+  color: #ef4444;
+}
+
+.addRelationship {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.addRelationship select {
+  width: 100%;
+  padding: 14px 16px;
+  padding-left: 44px;
+  border: 2px dashed var(--gray-300);
+  border-radius: 12px;
+  font-size: 15px;
+  color: var(--gray-600);
+  background: var(--gray-50);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.addRelationship select:hover {
+  border-color: var(--primary);
+  background: white;
+}
+
+.addRelationship select:focus {
+  outline: none;
+  border-color: var(--primary);
+  border-style: solid;
+  background: white;
+}
+
+.addIcon {
+  position: absolute;
+  left: 14px;
+  color: var(--gray-400);
+  pointer-events: none;
+}

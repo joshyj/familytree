@@ -1,3 +1,18 @@
+export type SpouseStatus = 'current' | 'divorced' | 'widowed' | 'separated';
+export type ParentType = 'biological' | 'step' | 'adoptive';
+
+export interface SpouseRelationship {
+  personId: string;
+  status: SpouseStatus;
+  marriageDate?: string;
+  divorceDate?: string;
+}
+
+export interface ParentRelationship {
+  personId: string;
+  type: ParentType;
+}
+
 export interface Person {
   id: string;
   firstName: string;
@@ -18,6 +33,9 @@ export interface Person {
   motherId?: string;
   spouseId?: string;
   spouseIds: string[];
+  // New relationship fields
+  spouseRelationships?: SpouseRelationship[];
+  parentRelationships?: ParentRelationship[];
   children: string[];
   childrenIds: string[];
   parents: string[];

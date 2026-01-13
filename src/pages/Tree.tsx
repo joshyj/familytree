@@ -1,14 +1,21 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Search, Users, Heart } from 'lucide-react';
+import { UserPlus, Search, Users, Heart, HeartCrack } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { getInitials, stringToColor, getFullName } from '../utils/helpers';
-import { Person } from '../types';
+import { Person, SpouseStatus } from '../types';
 import styles from './Tree.module.css';
+
+interface SpouseInfo {
+  person: Person;
+  status: SpouseStatus;
+}
 
 interface FamilyUnit {
   person: Person;
   spouse?: Person;
+  spouseStatus?: SpouseStatus;
+  exSpouses: SpouseInfo[];
   children: FamilyUnit[];
 }
 
@@ -44,15 +51,33 @@ export default function Tree() {
     return persons.filter((p) => !childIds.has(p.id));
   }, [persons, filteredPersons, searchQuery]);
 
-  // Build family unit with spouse and children
+  // Build family unit with spouse, ex-spouses, and children
   const buildFamilyUnit = (person: Person, visited: Set<string>): FamilyUnit | null => {
     if (visited.has(person.id)) return null;
     visited.add(person.id);
 
-    // Find spouse
-    const spouse = person.spouseId
-      ? persons.find((p) => p.id === person.spouseId)
-      : undefined;
+    // Find current spouse and ex-spouses from spouseRelationships
+    let spouse: Person | undefined;
+    let spouseStatus: SpouseStatus | undefined;
+    const exSpouses: SpouseInfo[] = [];
+
+    if (person.spouseRelationships && person.spouseRelationships.length > 0) {
+      person.spouseRelationships.forEach(rel => {
+        const spousePerson = persons.find(p => p.id === rel.personId);
+        if (spousePerson) {
+          if (rel.status === 'current') {
+            spouse = spousePerson;
+            spouseStatus = 'current';
+          } else {
+            exSpouses.push({ person: spousePerson, status: rel.status });
+          }
+        }
+      });
+    } else if (person.spouseId) {
+      // Fallback to old spouseId field
+      spouse = persons.find((p) => p.id === person.spouseId);
+      spouseStatus = 'current';
+    }
 
     if (spouse) {
       visited.add(spouse.id);
@@ -66,6 +91,12 @@ export default function Tree() {
       ...(spouse?.childrenIds || []),
     ]);
 
+    // Also include children from ex-spouses
+    exSpouses.forEach(ex => {
+      ex.person.children.forEach(id => childIds.add(id));
+      ex.person.childrenIds.forEach(id => childIds.add(id));
+    });
+
     const children: FamilyUnit[] = [];
     childIds.forEach((childId) => {
       const child = persons.find((p) => p.id === childId);
@@ -77,7 +108,7 @@ export default function Tree() {
       }
     });
 
-    return { person, spouse, children };
+    return { person, spouse, spouseStatus, exSpouses, children };
   };
 
   const familyUnits = useMemo(() => {
@@ -144,19 +175,73 @@ export default function Tree() {
     );
   };
 
+  // Component to render children with dynamic horizontal line
+  const ChildrenSection = ({ children }: { children: FamilyUnit[] }) => {
+    const rowRef = useRef<HTMLDivElement>(null);
+    const [lineStyle, setLineStyle] = useState<{ left: number; width: number } | null>(null);
+
+    useEffect(() => {
+      if (rowRef.current && children.length > 1) {
+        const childBranches = rowRef.current.querySelectorAll(`.${styles.childBranch}`);
+        if (childBranches.length >= 2) {
+          const first = childBranches[0] as HTMLElement;
+          const last = childBranches[childBranches.length - 1] as HTMLElement;
+          const rowRect = rowRef.current.getBoundingClientRect();
+          const firstRect = first.getBoundingClientRect();
+          const lastRect = last.getBoundingClientRect();
+
+          const left = firstRect.left + firstRect.width / 2 - rowRect.left;
+          const right = lastRect.left + lastRect.width / 2 - rowRect.left;
+
+          setLineStyle({ left, width: right - left });
+        }
+      }
+    }, [children.length]);
+
+    return (
+      <div className={styles.childrenContainer}>
+        {children.length > 1 && lineStyle && (
+          <div
+            className={styles.horizontalLine}
+            style={{ left: lineStyle.left, width: lineStyle.width }}
+          />
+        )}
+        <div className={styles.childrenRow} ref={rowRef}>
+          {children.map((child) => (
+            <div key={child.person.id} className={styles.childBranch}>
+              <div className={styles.childConnector} />
+              {renderFamilyUnit(child)}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   const renderFamilyUnit = (unit: FamilyUnit, isRoot = false) => {
-    const { person, spouse, children } = unit;
+    const { person, spouse, exSpouses, children } = unit;
     const hasChildren = children.length > 0;
 
     return (
       <div key={person.id} className={`${styles.familyUnit} ${isRoot ? styles.rootUnit : ''}`}>
-        {/* Parents row */}
+        {/* Parents row with current spouse and ex-spouses */}
         <div className={styles.coupleContainer}>
+          {/* Ex-spouses on the left */}
+          {exSpouses.map((ex) => (
+            <div key={ex.person.id} className={styles.exSpouseGroup}>
+              {renderPersonCard(ex.person, true)}
+              <div className={`${styles.spouseConnector} ${styles.exSpouseConnector}`}>
+                <HeartCrack size={14} className={styles.brokenHeartIcon} />
+              </div>
+            </div>
+          ))}
+
           {renderPersonCard(person)}
+
           {spouse && (
             <>
               <div className={styles.spouseConnector}>
-                <Heart size={14} className={styles.heartIcon} />
+                <Heart size={16} className={styles.heartIcon} />
               </div>
               {renderPersonCard(spouse, true)}
             </>
@@ -167,17 +252,7 @@ export default function Tree() {
         {hasChildren && (
           <>
             <div className={styles.verticalLine} />
-            <div className={styles.childrenContainer}>
-              {children.length > 1 && <div className={styles.horizontalLine} />}
-              <div className={styles.childrenRow}>
-                {children.map((child) => (
-                  <div key={child.person.id} className={styles.childBranch}>
-                    {children.length > 1 && <div className={styles.childConnector} />}
-                    {renderFamilyUnit(child)}
-                  </div>
-                ))}
-              </div>
-            </div>
+            <ChildrenSection children={children} />
           </>
         )}
       </div>
@@ -252,6 +327,10 @@ export default function Tree() {
           <div className={styles.legendItem}>
             <Heart size={12} className={styles.legendHeart} />
             <span>Married</span>
+          </div>
+          <div className={styles.legendItem}>
+            <HeartCrack size={12} className={styles.legendBrokenHeart} />
+            <span>Ex</span>
           </div>
         </div>
       )}
