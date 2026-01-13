@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useStore } from './store/useStore';
 import Layout from './components/Layout';
@@ -25,25 +25,15 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
 }
 
 function AppContent() {
-  const [isHydrated, setIsHydrated] = useState(false);
+  const checkSession = useStore((state) => state.checkSession);
+  const isLoading = useStore((state) => state.isLoading);
 
   useEffect(() => {
-    // Wait for Zustand to hydrate from localStorage
-    const unsubscribe = useStore.persist.onFinishHydration(() => {
-      setIsHydrated(true);
-    });
+    // Check for existing Supabase session on app load
+    checkSession();
+  }, [checkSession]);
 
-    // If already hydrated (e.g., no persisted state)
-    if (useStore.persist.hasHydrated()) {
-      setIsHydrated(true);
-    }
-
-    return () => {
-      unsubscribe();
-    };
-  }, []);
-
-  if (!isHydrated) {
+  if (isLoading) {
     return (
       <div style={{
         display: 'flex',

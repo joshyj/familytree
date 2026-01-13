@@ -1,483 +1,1045 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import { Person, User, Comment, Story, Photo } from '../types';
-
-// UUID generator that works in non-secure contexts (HTTP)
-const generateId = (): string => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    try {
-      return crypto.randomUUID();
-    } catch {
-      // Fall through to fallback
-    }
-  }
-  // Fallback for non-secure contexts
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-};
+import { supabase } from '../lib/supabase';
+import { Person, User, Comment, Story, Photo, SpouseRelationship, ParentRelationship } from '../types';
 
 interface AppState {
+  // Auth state
   currentUser: User | null;
   isAuthenticated: boolean;
+  isLoading: boolean;
+  authError: string | null;
+
+  // Family tree state
+  currentFamilyTreeId: string | null;
+  familyTreeName: string | null;
+
+  // Data state
   persons: Record<string, Person>;
   comments: Record<string, Comment[]>;
   stories: Record<string, Story[]>;
   selectedPersonId: string | null;
 
-  login: (email: string, password: string) => boolean;
-  register: (email: string, password: string, displayName: string) => boolean;
-  logout: () => void;
+  // Auth actions
+  login: (email: string, password: string) => Promise<boolean>;
+  register: (email: string, password: string, displayName: string) => Promise<boolean>;
+  logout: () => Promise<void>;
+  checkSession: () => Promise<void>;
 
-  addPerson: (person: Partial<Person> & { firstName: string; lastName: string }) => Person;
-  updatePerson: (id: string, updates: Partial<Person>) => void;
-  deletePerson: (id: string) => void;
+  // Family tree actions
+  createFamilyTree: (name: string, description?: string) => Promise<string | null>;
+  joinFamilyTree: (treeId: string) => Promise<boolean>;
+  switchFamilyTree: (treeId: string) => Promise<void>;
+  getFamilyTrees: () => Promise<{ id: string; name: string; role: string }[]>;
+
+  // Person actions
+  loadPersons: () => Promise<void>;
+  addPerson: (person: Partial<Person> & { firstName: string; lastName: string }) => Promise<Person | null>;
+  updatePerson: (id: string, updates: Partial<Person>) => Promise<void>;
+  deletePerson: (id: string) => Promise<void>;
   getPerson: (id: string) => Person | undefined;
   getAllPersons: () => Person[];
 
-  addChild: (parentId: string, childId: string) => void;
-  addSpouse: (person1Id: string, person2Id: string) => void;
-  setParent: (childId: string, parentId: string, parentType: 'father' | 'mother') => void;
+  // Relationship actions
+  addChild: (parentId: string, childId: string) => Promise<void>;
+  addSpouse: (person1Id: string, person2Id: string) => Promise<void>;
+  setParent: (childId: string, parentId: string, parentType: 'father' | 'mother') => Promise<void>;
 
-  addComment: (personId: string, content: string) => void;
+  // Comment actions
+  addComment: (personId: string, content: string) => Promise<void>;
   getComments: (personId: string) => Comment[];
+  loadComments: (personId: string) => Promise<void>;
 
-  addStory: (personId: string, content: string, authorId: string) => void;
+  // Story actions
+  addStory: (personId: string, content: string, authorId: string) => Promise<void>;
   getStories: (personId: string) => Story[];
+  loadStories: (personId: string) => Promise<void>;
 
-  addPhoto: (personId: string, photoUrl: string, caption?: string) => void;
-  addPhotoToPerson: (personId: string, photoUrl: string, caption?: string) => void;
-  setProfilePhoto: (personId: string, photoUrl: string) => void;
+  // Photo actions
+  addPhoto: (personId: string, photoUrl: string, caption?: string) => Promise<void>;
+  addPhotoToPerson: (personId: string, photoUrl: string, caption?: string) => Promise<void>;
+  setProfilePhoto: (personId: string, photoUrl: string) => Promise<void>;
 
+  // Utility actions
   selectPerson: (id: string | null) => void;
   searchPersons: (query: string) => Person[];
-
   getChildren: (personId: string) => Person[];
   getParents: (personId: string) => Person[];
   getSpouses: (personId: string) => Person[];
   getSiblings: (personId: string) => Person[];
 }
 
-interface StoredUser {
-  email: string;
-  password: string;
-  displayName: string;
-}
+// Helper to convert DB row to Person type
+const dbRowToPerson = (row: any, relationships: any[] = []): Person => {
+  const spouseRelationships: SpouseRelationship[] = relationships
+    .filter(r => r.relationship_type === 'spouse' && r.person_id === row.id)
+    .map(r => ({
+      personId: r.related_person_id,
+      status: (r.subtype || 'current') as SpouseRelationship['status'],
+    }));
 
-const getStoredUsers = (): Record<string, StoredUser> => {
-  const stored = localStorage.getItem('familyroots_users');
-  return stored ? JSON.parse(stored) : {};
+  const parentRelationships: ParentRelationship[] = relationships
+    .filter(r => r.relationship_type === 'parent' && r.person_id === row.id)
+    .map(r => ({
+      personId: r.related_person_id,
+      type: (r.subtype || 'biological') as ParentRelationship['type'],
+    }));
+
+  // Get children (where this person is the related_person in a parent relationship)
+  const childIds = relationships
+    .filter(r => r.relationship_type === 'parent' && r.related_person_id === row.id)
+    .map(r => r.person_id);
+
+  // Get parent IDs
+  const parentIds = parentRelationships.map(r => r.personId);
+
+  // Get spouse IDs
+  const spouseIds = spouseRelationships.map(r => r.personId);
+  const currentSpouse = spouseRelationships.find(r => r.status === 'current');
+
+  return {
+    id: row.id,
+    firstName: row.first_name,
+    lastName: row.last_name || '',
+    nickname: row.nickname,
+    gender: row.gender,
+    birthDate: row.birth_date,
+    birthPlace: row.birth_place,
+    deathDate: row.death_date,
+    deathPlace: row.death_place,
+    isLiving: row.is_living ?? true,
+    profilePhoto: row.profile_photo,
+    photos: [], // Will be loaded separately if needed
+    bio: row.bio,
+    occupation: row.occupation,
+    fatherId: undefined, // Will be computed from relationships
+    motherId: undefined,
+    spouseId: currentSpouse?.personId,
+    spouseIds,
+    spouseRelationships,
+    parentRelationships,
+    children: childIds,
+    childrenIds: childIds,
+    parents: parentIds,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    createdBy: row.created_by,
+  };
 };
 
-const setStoredUsers = (users: Record<string, StoredUser>) => {
-  localStorage.setItem('familyroots_users', JSON.stringify(users));
-};
+export const useStore = create<AppState>()((set, get) => ({
+  currentUser: null,
+  isAuthenticated: false,
+  isLoading: true,
+  authError: null,
+  currentFamilyTreeId: null,
+  familyTreeName: null,
+  persons: {},
+  comments: {},
+  stories: {},
+  selectedPersonId: null,
 
-export const useStore = create<AppState>()(
-  persist(
-    (set, get) => ({
+  checkSession: async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (session?.user) {
+        // Get profile data
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
+
+        const user: User = {
+          id: session.user.id,
+          email: session.user.email || '',
+          displayName: profile?.display_name || session.user.email?.split('@')[0] || 'User',
+          avatarUrl: profile?.avatar_url,
+          role: 'admin',
+          familyTreeId: profile?.current_family_tree_id || 'default',
+          createdAt: session.user.created_at,
+        };
+
+        set({
+          currentUser: user,
+          isAuthenticated: true,
+          currentFamilyTreeId: profile?.current_family_tree_id,
+          isLoading: false,
+        });
+
+        // Load persons if we have a family tree
+        if (profile?.current_family_tree_id) {
+          await get().loadPersons();
+        }
+      } else {
+        set({ isLoading: false });
+      }
+    } catch (error) {
+      console.error('Session check error:', error);
+      set({ isLoading: false });
+    }
+  },
+
+  login: async (email, password) => {
+    set({ authError: null, isLoading: true });
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        set({ authError: error.message, isLoading: false });
+        return false;
+      }
+
+      if (data.user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', data.user.id)
+          .single();
+
+        const user: User = {
+          id: data.user.id,
+          email: data.user.email || '',
+          displayName: profile?.display_name || email.split('@')[0],
+          avatarUrl: profile?.avatar_url,
+          role: 'admin',
+          familyTreeId: profile?.current_family_tree_id || 'default',
+          createdAt: data.user.created_at,
+        };
+
+        set({
+          currentUser: user,
+          isAuthenticated: true,
+          currentFamilyTreeId: profile?.current_family_tree_id,
+          isLoading: false,
+        });
+
+        // Load persons if we have a family tree
+        if (profile?.current_family_tree_id) {
+          await get().loadPersons();
+        }
+
+        return true;
+      }
+
+      set({ isLoading: false });
+      return false;
+    } catch (error: any) {
+      set({ authError: error.message, isLoading: false });
+      return false;
+    }
+  },
+
+  register: async (email, password, displayName) => {
+    set({ authError: null, isLoading: true });
+
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { display_name: displayName },
+        },
+      });
+
+      if (error) {
+        set({ authError: error.message, isLoading: false });
+        return false;
+      }
+
+      if (data.user) {
+        // Create a default family tree for new users
+        const { data: treeData, error: treeError } = await supabase
+          .from('family_trees')
+          .insert({
+            name: `${displayName}'s Family Tree`,
+            created_by: data.user.id,
+          })
+          .select()
+          .single();
+
+        if (treeError) {
+          console.error('Error creating family tree:', treeError);
+        }
+
+        const user: User = {
+          id: data.user.id,
+          email: data.user.email || '',
+          displayName,
+          role: 'admin',
+          familyTreeId: treeData?.id || 'default',
+          createdAt: data.user.created_at,
+        };
+
+        set({
+          currentUser: user,
+          isAuthenticated: true,
+          currentFamilyTreeId: treeData?.id || null,
+          familyTreeName: treeData?.name || null,
+          isLoading: false,
+        });
+
+        return true;
+      }
+
+      set({ isLoading: false });
+      return false;
+    } catch (error: any) {
+      set({ authError: error.message, isLoading: false });
+      return false;
+    }
+  },
+
+  logout: async () => {
+    await supabase.auth.signOut();
+    set({
       currentUser: null,
       isAuthenticated: false,
+      currentFamilyTreeId: null,
+      familyTreeName: null,
       persons: {},
       comments: {},
       stories: {},
-      selectedPersonId: null,
+    });
+  },
 
-      login: (email, password) => {
-        const users = getStoredUsers();
-        const userEntry = Object.entries(users).find(([_, u]) => u.email === email.toLowerCase());
+  createFamilyTree: async (name, description) => {
+    const { currentUser } = get();
+    if (!currentUser) return null;
 
-        if (userEntry && userEntry[1].password === password) {
-          const user: User = {
-            id: userEntry[0],
-            email: userEntry[1].email,
-            displayName: userEntry[1].displayName,
-            role: 'admin',
-            familyTreeId: 'default',
-            createdAt: new Date().toISOString(),
-          };
-          set({ currentUser: user, isAuthenticated: true });
-          return true;
-        }
+    try {
+      const { data, error } = await supabase
+        .from('family_trees')
+        .insert({
+          name,
+          description,
+          created_by: currentUser.id,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error creating family tree:', error);
+        return null;
+      }
+
+      set({ currentFamilyTreeId: data.id, familyTreeName: data.name });
+      return data.id;
+    } catch (error) {
+      console.error('Error creating family tree:', error);
+      return null;
+    }
+  },
+
+  joinFamilyTree: async (treeId) => {
+    const { currentUser } = get();
+    if (!currentUser) return false;
+
+    try {
+      // Add user as viewer to the family tree
+      const { error } = await supabase
+        .from('family_tree_members')
+        .insert({
+          family_tree_id: treeId,
+          user_id: currentUser.id,
+          role: 'viewer',
+        });
+
+      if (error) {
+        console.error('Error joining family tree:', error);
         return false;
-      },
+      }
 
-      register: (email, password, displayName) => {
-        const users = getStoredUsers();
-        if (Object.values(users).some(u => u.email === email.toLowerCase())) {
-          return false;
-        }
+      // Update user's current family tree
+      await supabase
+        .from('profiles')
+        .update({ current_family_tree_id: treeId })
+        .eq('id', currentUser.id);
 
-        const userId = generateId();
-        users[userId] = { email: email.toLowerCase(), password, displayName };
-        setStoredUsers(users);
+      set({ currentFamilyTreeId: treeId });
+      await get().loadPersons();
 
-        const user: User = {
-          id: userId,
-          email: email.toLowerCase(),
-          displayName,
-          role: 'admin',
-          familyTreeId: 'default',
-          createdAt: new Date().toISOString(),
-        };
+      return true;
+    } catch (error) {
+      console.error('Error joining family tree:', error);
+      return false;
+    }
+  },
 
-        set({ currentUser: user, isAuthenticated: true });
-        return true;
-      },
+  switchFamilyTree: async (treeId) => {
+    const { currentUser } = get();
+    if (!currentUser) return;
 
-      logout: () => {
-        set({ currentUser: null, isAuthenticated: false });
-      },
+    // Update user's current family tree
+    await supabase
+      .from('profiles')
+      .update({ current_family_tree_id: treeId })
+      .eq('id', currentUser.id);
 
-      addPerson: (personData) => {
-        const { currentUser } = get();
-        const id = generateId();
-        const now = new Date().toISOString();
+    set({ currentFamilyTreeId: treeId, persons: {} });
+    await get().loadPersons();
+  },
 
-        const person: Person = {
-          id,
-          firstName: personData.firstName,
-          lastName: personData.lastName,
+  getFamilyTrees: async () => {
+    const { currentUser } = get();
+    if (!currentUser) return [];
+
+    try {
+      const { data, error } = await supabase
+        .from('family_tree_members')
+        .select(`
+          role,
+          family_trees (
+            id,
+            name
+          )
+        `)
+        .eq('user_id', currentUser.id);
+
+      if (error) {
+        console.error('Error fetching family trees:', error);
+        return [];
+      }
+
+      return data.map((item: any) => ({
+        id: item.family_trees.id,
+        name: item.family_trees.name,
+        role: item.role,
+      }));
+    } catch (error) {
+      console.error('Error fetching family trees:', error);
+      return [];
+    }
+  },
+
+  loadPersons: async () => {
+    const { currentFamilyTreeId } = get();
+    if (!currentFamilyTreeId) return;
+
+    try {
+      // Load all persons for the family tree
+      const { data: personsData, error: personsError } = await supabase
+        .from('persons')
+        .select('*')
+        .eq('family_tree_id', currentFamilyTreeId);
+
+      if (personsError) {
+        console.error('Error loading persons:', personsError);
+        return;
+      }
+
+      // Load all relationships for the family tree
+      const { data: relationshipsData, error: relError } = await supabase
+        .from('relationships')
+        .select('*')
+        .eq('family_tree_id', currentFamilyTreeId);
+
+      if (relError) {
+        console.error('Error loading relationships:', relError);
+      }
+
+      const relationships = relationshipsData || [];
+
+      // Convert to Person records
+      const persons: Record<string, Person> = {};
+      personsData?.forEach(row => {
+        persons[row.id] = dbRowToPerson(row, relationships);
+      });
+
+      set({ persons });
+    } catch (error) {
+      console.error('Error loading persons:', error);
+    }
+  },
+
+  addPerson: async (personData) => {
+    const { currentUser, currentFamilyTreeId } = get();
+    if (!currentUser || !currentFamilyTreeId) return null;
+
+    try {
+      // Insert person
+      const { data: newPerson, error } = await supabase
+        .from('persons')
+        .insert({
+          family_tree_id: currentFamilyTreeId,
+          first_name: personData.firstName,
+          last_name: personData.lastName || '',
           nickname: personData.nickname,
           gender: personData.gender,
-          birthDate: personData.birthDate,
-          birthPlace: personData.birthPlace,
-          deathDate: personData.deathDate,
-          deathPlace: personData.deathPlace,
-          isLiving: personData.isLiving ?? true,
-          profilePhoto: personData.profilePhoto,
-          photos: [],
+          birth_date: personData.birthDate,
+          birth_place: personData.birthPlace,
+          death_date: personData.deathDate,
+          death_place: personData.deathPlace,
+          is_living: personData.isLiving ?? true,
+          profile_photo: personData.profilePhoto,
           bio: personData.bio,
           occupation: personData.occupation,
-          fatherId: personData.fatherId,
-          motherId: personData.motherId,
-          spouseId: personData.spouseId,
-          spouseIds: personData.spouseIds || [],
-          spouseRelationships: personData.spouseRelationships || [],
-          parentRelationships: personData.parentRelationships || [],
-          children: personData.children || [],
-          childrenIds: personData.childrenIds || [],
-          parents: personData.parents || [],
-          createdAt: now,
-          updatedAt: now,
-          createdBy: currentUser?.id || 'unknown',
-        };
+          created_by: currentUser.id,
+        })
+        .select()
+        .single();
 
-        set((state) => ({
-          persons: { ...state.persons, [id]: person }
-        }));
+      if (error) {
+        console.error('Error adding person:', error);
+        return null;
+      }
 
-        // Handle spouse relationship if spouseId is provided
-        if (personData.spouseId) {
-          const { persons } = get();
-          const spouse = persons[personData.spouseId];
-          if (spouse) {
-            set((state) => ({
-              persons: {
-                ...state.persons,
-                [personData.spouseId!]: {
-                  ...spouse,
-                  spouseId: id,
-                  spouseIds: [...new Set([...spouse.spouseIds, id])],
-                }
-              }
-            }));
-          }
+      // Insert relationships
+      const relationshipsToInsert: any[] = [];
+
+      // Parent relationships
+      if (personData.parentRelationships) {
+        personData.parentRelationships.forEach(rel => {
+          relationshipsToInsert.push({
+            family_tree_id: currentFamilyTreeId,
+            person_id: newPerson.id,
+            related_person_id: rel.personId,
+            relationship_type: 'parent',
+            subtype: rel.type,
+          });
+        });
+      } else if (personData.parents) {
+        personData.parents.forEach(parentId => {
+          relationshipsToInsert.push({
+            family_tree_id: currentFamilyTreeId,
+            person_id: newPerson.id,
+            related_person_id: parentId,
+            relationship_type: 'parent',
+            subtype: 'biological',
+          });
+        });
+      }
+
+      // Spouse relationships
+      if (personData.spouseRelationships) {
+        personData.spouseRelationships.forEach(rel => {
+          relationshipsToInsert.push({
+            family_tree_id: currentFamilyTreeId,
+            person_id: newPerson.id,
+            related_person_id: rel.personId,
+            relationship_type: 'spouse',
+            subtype: rel.status,
+          });
+          // Also add reciprocal relationship
+          relationshipsToInsert.push({
+            family_tree_id: currentFamilyTreeId,
+            person_id: rel.personId,
+            related_person_id: newPerson.id,
+            relationship_type: 'spouse',
+            subtype: rel.status,
+          });
+        });
+      } else if (personData.spouseId) {
+        relationshipsToInsert.push({
+          family_tree_id: currentFamilyTreeId,
+          person_id: newPerson.id,
+          related_person_id: personData.spouseId,
+          relationship_type: 'spouse',
+          subtype: 'current',
+        });
+        relationshipsToInsert.push({
+          family_tree_id: currentFamilyTreeId,
+          person_id: personData.spouseId,
+          related_person_id: newPerson.id,
+          relationship_type: 'spouse',
+          subtype: 'current',
+        });
+      }
+
+      if (relationshipsToInsert.length > 0) {
+        await supabase.from('relationships').insert(relationshipsToInsert);
+      }
+
+      // Reload all persons to get updated relationships
+      await get().loadPersons();
+
+      return get().persons[newPerson.id];
+    } catch (error) {
+      console.error('Error adding person:', error);
+      return null;
+    }
+  },
+
+  updatePerson: async (id, updates) => {
+    const { currentFamilyTreeId } = get();
+    if (!currentFamilyTreeId) return;
+
+    try {
+      // Update person data
+      const dbUpdates: any = {};
+      if (updates.firstName !== undefined) dbUpdates.first_name = updates.firstName;
+      if (updates.lastName !== undefined) dbUpdates.last_name = updates.lastName;
+      if (updates.nickname !== undefined) dbUpdates.nickname = updates.nickname;
+      if (updates.gender !== undefined) dbUpdates.gender = updates.gender;
+      if (updates.birthDate !== undefined) dbUpdates.birth_date = updates.birthDate;
+      if (updates.birthPlace !== undefined) dbUpdates.birth_place = updates.birthPlace;
+      if (updates.deathDate !== undefined) dbUpdates.death_date = updates.deathDate;
+      if (updates.deathPlace !== undefined) dbUpdates.death_place = updates.deathPlace;
+      if (updates.isLiving !== undefined) dbUpdates.is_living = updates.isLiving;
+      if (updates.profilePhoto !== undefined) dbUpdates.profile_photo = updates.profilePhoto;
+      if (updates.bio !== undefined) dbUpdates.bio = updates.bio;
+      if (updates.occupation !== undefined) dbUpdates.occupation = updates.occupation;
+
+      if (Object.keys(dbUpdates).length > 0) {
+        const { error } = await supabase
+          .from('persons')
+          .update(dbUpdates)
+          .eq('id', id);
+
+        if (error) {
+          console.error('Error updating person:', error);
+          return;
         }
+      }
 
-        // Handle parent relationships
-        if (personData.parents && personData.parents.length > 0) {
-          const { persons } = get();
-          personData.parents.forEach((parentId) => {
-            const parent = persons[parentId];
-            if (parent) {
-              set((state) => ({
-                persons: {
-                  ...state.persons,
-                  [parentId]: {
-                    ...parent,
-                    children: [...new Set([...parent.children, id])],
-                    childrenIds: [...new Set([...parent.childrenIds, id])],
-                  }
-                }
-              }));
-            }
+      // Handle relationship updates
+      if (updates.spouseRelationships !== undefined || updates.parentRelationships !== undefined) {
+        // Delete existing relationships for this person
+        await supabase
+          .from('relationships')
+          .delete()
+          .eq('person_id', id);
+
+        // Also delete reciprocal spouse relationships
+        await supabase
+          .from('relationships')
+          .delete()
+          .eq('related_person_id', id)
+          .eq('relationship_type', 'spouse');
+
+        const relationshipsToInsert: any[] = [];
+
+        // Add parent relationships
+        if (updates.parentRelationships) {
+          updates.parentRelationships.forEach(rel => {
+            relationshipsToInsert.push({
+              family_tree_id: currentFamilyTreeId,
+              person_id: id,
+              related_person_id: rel.personId,
+              relationship_type: 'parent',
+              subtype: rel.type,
+            });
           });
         }
 
-        return get().persons[id];
-      },
+        // Add spouse relationships (bidirectional)
+        if (updates.spouseRelationships) {
+          updates.spouseRelationships.forEach(rel => {
+            relationshipsToInsert.push({
+              family_tree_id: currentFamilyTreeId,
+              person_id: id,
+              related_person_id: rel.personId,
+              relationship_type: 'spouse',
+              subtype: rel.status,
+            });
+            relationshipsToInsert.push({
+              family_tree_id: currentFamilyTreeId,
+              person_id: rel.personId,
+              related_person_id: id,
+              relationship_type: 'spouse',
+              subtype: rel.status,
+            });
+          });
+        }
 
-      updatePerson: (id, updates) => {
-        set((state) => ({
+        if (relationshipsToInsert.length > 0) {
+          await supabase.from('relationships').insert(relationshipsToInsert);
+        }
+      }
+
+      // Reload persons to get updated data
+      await get().loadPersons();
+    } catch (error) {
+      console.error('Error updating person:', error);
+    }
+  },
+
+  deletePerson: async (id) => {
+    try {
+      const { error } = await supabase
+        .from('persons')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error deleting person:', error);
+        return;
+      }
+
+      // Reload persons
+      await get().loadPersons();
+    } catch (error) {
+      console.error('Error deleting person:', error);
+    }
+  },
+
+  getPerson: (id) => get().persons[id],
+
+  getAllPersons: () => Object.values(get().persons),
+
+  addChild: async (parentId, childId) => {
+    const { currentFamilyTreeId } = get();
+    if (!currentFamilyTreeId) return;
+
+    try {
+      await supabase.from('relationships').insert({
+        family_tree_id: currentFamilyTreeId,
+        person_id: childId,
+        related_person_id: parentId,
+        relationship_type: 'parent',
+        subtype: 'biological',
+      });
+
+      await get().loadPersons();
+    } catch (error) {
+      console.error('Error adding child relationship:', error);
+    }
+  },
+
+  addSpouse: async (person1Id, person2Id) => {
+    const { currentFamilyTreeId } = get();
+    if (!currentFamilyTreeId) return;
+
+    try {
+      await supabase.from('relationships').insert([
+        {
+          family_tree_id: currentFamilyTreeId,
+          person_id: person1Id,
+          related_person_id: person2Id,
+          relationship_type: 'spouse',
+          subtype: 'current',
+        },
+        {
+          family_tree_id: currentFamilyTreeId,
+          person_id: person2Id,
+          related_person_id: person1Id,
+          relationship_type: 'spouse',
+          subtype: 'current',
+        },
+      ]);
+
+      await get().loadPersons();
+    } catch (error) {
+      console.error('Error adding spouse relationship:', error);
+    }
+  },
+
+  setParent: async (childId, parentId, _parentType) => {
+    const { currentFamilyTreeId } = get();
+    if (!currentFamilyTreeId) return;
+
+    try {
+      await supabase.from('relationships').insert({
+        family_tree_id: currentFamilyTreeId,
+        person_id: childId,
+        related_person_id: parentId,
+        relationship_type: 'parent',
+        subtype: 'biological',
+      });
+
+      await get().loadPersons();
+    } catch (error) {
+      console.error('Error setting parent:', error);
+    }
+  },
+
+  addComment: async (personId, content) => {
+    const { currentUser } = get();
+    if (!currentUser) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('comments')
+        .insert({
+          person_id: personId,
+          author_id: currentUser.id,
+          author_name: currentUser.displayName,
+          content,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error adding comment:', error);
+        return;
+      }
+
+      const comment: Comment = {
+        id: data.id,
+        personId: data.person_id,
+        authorId: data.author_id,
+        authorName: data.author_name,
+        content: data.content,
+        createdAt: data.created_at,
+      };
+
+      set((state) => ({
+        comments: {
+          ...state.comments,
+          [personId]: [...(state.comments[personId] || []), comment],
+        },
+      }));
+    } catch (error) {
+      console.error('Error adding comment:', error);
+    }
+  },
+
+  getComments: (personId) => get().comments[personId] || [],
+
+  loadComments: async (personId) => {
+    try {
+      const { data, error } = await supabase
+        .from('comments')
+        .select('*')
+        .eq('person_id', personId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('Error loading comments:', error);
+        return;
+      }
+
+      const comments: Comment[] = data.map(row => ({
+        id: row.id,
+        personId: row.person_id,
+        authorId: row.author_id,
+        authorName: row.author_name,
+        content: row.content,
+        createdAt: row.created_at,
+      }));
+
+      set((state) => ({
+        comments: {
+          ...state.comments,
+          [personId]: comments,
+        },
+      }));
+    } catch (error) {
+      console.error('Error loading comments:', error);
+    }
+  },
+
+  addStory: async (personId, content, authorId) => {
+    const { currentUser } = get();
+    if (!currentUser) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('stories')
+        .insert({
+          person_id: personId,
+          author_id: authorId || currentUser.id,
+          author_name: currentUser.displayName,
+          title: 'Story',
+          content,
+          is_featured: false,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error adding story:', error);
+        return;
+      }
+
+      const story: Story = {
+        id: data.id,
+        personId: data.person_id,
+        authorId: data.author_id,
+        authorName: data.author_name,
+        content: data.content,
+        isFeatured: data.is_featured,
+        createdAt: data.created_at,
+      };
+
+      set((state) => ({
+        stories: {
+          ...state.stories,
+          [personId]: [...(state.stories[personId] || []), story],
+        },
+      }));
+    } catch (error) {
+      console.error('Error adding story:', error);
+    }
+  },
+
+  getStories: (personId) => get().stories[personId] || [],
+
+  loadStories: async (personId) => {
+    try {
+      const { data, error } = await supabase
+        .from('stories')
+        .select('*')
+        .eq('person_id', personId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('Error loading stories:', error);
+        return;
+      }
+
+      const stories: Story[] = data.map(row => ({
+        id: row.id,
+        personId: row.person_id,
+        authorId: row.author_id,
+        authorName: row.author_name,
+        content: row.content,
+        isFeatured: row.is_featured,
+        createdAt: row.created_at,
+      }));
+
+      set((state) => ({
+        stories: {
+          ...state.stories,
+          [personId]: stories,
+        },
+      }));
+    } catch (error) {
+      console.error('Error loading stories:', error);
+    }
+  },
+
+  addPhoto: async (personId, photoUrl, caption) => {
+    const { currentUser } = get();
+    if (!currentUser) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('person_photos')
+        .insert({
+          person_id: personId,
+          url: photoUrl,
+          caption,
+          uploaded_by: currentUser.id,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error adding photo:', error);
+        return;
+      }
+
+      // Update local state
+      const photo: Photo = {
+        id: data.id,
+        url: data.url,
+        uri: data.url,
+        caption: data.caption,
+        taggedPersonIds: [personId],
+        uploadedAt: data.uploaded_at,
+        uploadedBy: data.uploaded_by,
+      };
+
+      set((state) => {
+        const person = state.persons[personId];
+        if (!person) return state;
+
+        return {
           persons: {
             ...state.persons,
-            [id]: {
-              ...state.persons[id],
-              ...updates,
-              updatedAt: new Date().toISOString(),
-            }
-          }
-        }));
-      },
-
-      deletePerson: (id) => {
-        set((state) => {
-          const newPersons = { ...state.persons };
-          delete newPersons[id];
-
-          Object.values(newPersons).forEach(person => {
-            if (person.fatherId === id) person.fatherId = undefined;
-            if (person.motherId === id) person.motherId = undefined;
-            if (person.spouseId === id) person.spouseId = undefined;
-            person.spouseIds = person.spouseIds.filter(sid => sid !== id);
-            person.childrenIds = person.childrenIds.filter(cid => cid !== id);
-            person.children = person.children.filter(cid => cid !== id);
-            person.parents = person.parents.filter(pid => pid !== id);
-          });
-
-          return { persons: newPersons };
-        });
-      },
-
-      getPerson: (id) => get().persons[id],
-
-      getAllPersons: () => Object.values(get().persons),
-
-      addChild: (parentId, childId) => {
-        const { persons } = get();
-        const parent = persons[parentId];
-        const child = persons[childId];
-
-        if (parent && child) {
-          set((state) => ({
-            persons: {
-              ...state.persons,
-              [parentId]: {
-                ...parent,
-                childrenIds: [...new Set([...parent.childrenIds, childId])],
-                children: [...new Set([...parent.children, childId])],
-              },
-              [childId]: {
-                ...child,
-                ...(parent.gender === 'male' ? { fatherId: parentId } : { motherId: parentId }),
-                parents: [...new Set([...child.parents, parentId])],
-              }
-            }
-          }));
-        }
-      },
-
-      addSpouse: (person1Id, person2Id) => {
-        const { persons } = get();
-        const person1 = persons[person1Id];
-        const person2 = persons[person2Id];
-
-        if (person1 && person2) {
-          set((state) => ({
-            persons: {
-              ...state.persons,
-              [person1Id]: {
-                ...person1,
-                spouseId: person2Id,
-                spouseIds: [...new Set([...person1.spouseIds, person2Id])],
-              },
-              [person2Id]: {
-                ...person2,
-                spouseId: person1Id,
-                spouseIds: [...new Set([...person2.spouseIds, person1Id])],
-              }
-            }
-          }));
-        }
-      },
-
-      setParent: (childId, parentId, parentType) => {
-        const { persons } = get();
-        const child = persons[childId];
-        const parent = persons[parentId];
-
-        if (child && parent) {
-          set((state) => ({
-            persons: {
-              ...state.persons,
-              [childId]: {
-                ...child,
-                [parentType === 'father' ? 'fatherId' : 'motherId']: parentId,
-                parents: [...new Set([...child.parents, parentId])],
-              },
-              [parentId]: {
-                ...parent,
-                childrenIds: [...new Set([...parent.childrenIds, childId])],
-                children: [...new Set([...parent.children, childId])],
-              }
-            }
-          }));
-        }
-      },
-
-      addComment: (personId, content) => {
-        const { currentUser } = get();
-        const comment: Comment = {
-          id: generateId(),
-          personId,
-          authorId: currentUser?.id || 'unknown',
-          authorName: currentUser?.displayName || 'Anonymous',
-          content,
-          createdAt: new Date().toISOString(),
+            [personId]: {
+              ...person,
+              photos: [...person.photos, photo],
+            },
+          },
         };
-
-        set((state) => ({
-          comments: {
-            ...state.comments,
-            [personId]: [...(state.comments[personId] || []), comment],
-          }
-        }));
-      },
-
-      getComments: (personId) => get().comments[personId] || [],
-
-      addStory: (personId, content, authorId) => {
-        const { currentUser } = get();
-        const story: Story = {
-          id: generateId(),
-          personId,
-          authorId: authorId || currentUser?.id || 'unknown',
-          authorName: currentUser?.displayName || 'Anonymous',
-          content,
-          isFeatured: false,
-          createdAt: new Date().toISOString(),
-        };
-
-        set((state) => ({
-          stories: {
-            ...state.stories,
-            [personId]: [...(state.stories[personId] || []), story],
-          }
-        }));
-      },
-
-      getStories: (personId) => get().stories[personId] || [],
-
-      addPhoto: (personId, photoUrl, caption) => {
-        const { currentUser, persons } = get();
-        const person = persons[personId];
-
-        if (person) {
-          const photo: Photo = {
-            id: generateId(),
-            url: photoUrl,
-            uri: photoUrl,
-            caption,
-            taggedPersonIds: [personId],
-            uploadedAt: new Date().toISOString(),
-            uploadedBy: currentUser?.id || 'unknown',
-          };
-
-          set((state) => ({
-            persons: {
-              ...state.persons,
-              [personId]: {
-                ...person,
-                photos: [...person.photos, photo],
-              }
-            }
-          }));
-        }
-      },
-
-      addPhotoToPerson: (personId, photoUrl, caption) => {
-        get().addPhoto(personId, photoUrl, caption);
-      },
-
-      setProfilePhoto: (personId, photoUrl) => {
-        get().updatePerson(personId, { profilePhoto: photoUrl });
-      },
-
-      selectPerson: (id) => set({ selectedPersonId: id }),
-
-      searchPersons: (query) => {
-        const normalizedQuery = query.toLowerCase().trim();
-        if (!normalizedQuery) return [];
-
-        return Object.values(get().persons).filter(person => {
-          const fullName = `${person.firstName} ${person.lastName}`.toLowerCase();
-          const maidenName = person.maidenName?.toLowerCase() || '';
-          const birthPlace = person.birthPlace?.toLowerCase() || '';
-          const nickname = person.nickname?.toLowerCase() || '';
-
-          return fullName.includes(normalizedQuery) ||
-                 maidenName.includes(normalizedQuery) ||
-                 birthPlace.includes(normalizedQuery) ||
-                 nickname.includes(normalizedQuery);
-        });
-      },
-
-      getChildren: (personId) => {
-        const { persons } = get();
-        const person = persons[personId];
-        if (!person) return [];
-        const childIds = [...new Set([...person.childrenIds, ...person.children])];
-        return childIds.map(id => persons[id]).filter(Boolean);
-      },
-
-      getParents: (personId) => {
-        const { persons } = get();
-        const person = persons[personId];
-        if (!person) return [];
-        const parentIds = [...new Set([person.fatherId, person.motherId, ...person.parents].filter(Boolean))] as string[];
-        return parentIds.map(id => persons[id]).filter(Boolean);
-      },
-
-      getSpouses: (personId) => {
-        const { persons } = get();
-        const person = persons[personId];
-        if (!person) return [];
-        const spouseIdList = [...new Set([person.spouseId, ...person.spouseIds].filter(Boolean))] as string[];
-        return spouseIdList.map(id => persons[id]).filter(Boolean);
-      },
-
-      getSiblings: (personId) => {
-        const { persons } = get();
-        const person = persons[personId];
-        if (!person) return [];
-
-        const siblingIds = new Set<string>();
-
-        if (person.fatherId) {
-          const father = persons[person.fatherId];
-          father?.childrenIds.forEach(id => {
-            if (id !== personId) siblingIds.add(id);
-          });
-          father?.children.forEach(id => {
-            if (id !== personId) siblingIds.add(id);
-          });
-        }
-
-        if (person.motherId) {
-          const mother = persons[person.motherId];
-          mother?.childrenIds.forEach(id => {
-            if (id !== personId) siblingIds.add(id);
-          });
-          mother?.children.forEach(id => {
-            if (id !== personId) siblingIds.add(id);
-          });
-        }
-
-        return Array.from(siblingIds).map(id => persons[id]).filter(Boolean);
-      },
-    }),
-    {
-      name: 'familyroots-storage',
-      partialize: (state) => ({
-        persons: state.persons,
-        comments: state.comments,
-        stories: state.stories,
-        currentUser: state.currentUser,
-        isAuthenticated: state.isAuthenticated,
-      }),
+      });
+    } catch (error) {
+      console.error('Error adding photo:', error);
     }
-  )
-);
+  },
+
+  addPhotoToPerson: async (personId, photoUrl, caption) => {
+    await get().addPhoto(personId, photoUrl, caption);
+  },
+
+  setProfilePhoto: async (personId, photoUrl) => {
+    await get().updatePerson(personId, { profilePhoto: photoUrl });
+  },
+
+  selectPerson: (id) => set({ selectedPersonId: id }),
+
+  searchPersons: (query) => {
+    const normalizedQuery = query.toLowerCase().trim();
+    if (!normalizedQuery) return [];
+
+    return Object.values(get().persons).filter((person) => {
+      const fullName = `${person.firstName} ${person.lastName}`.toLowerCase();
+      const birthPlace = person.birthPlace?.toLowerCase() || '';
+      const nickname = person.nickname?.toLowerCase() || '';
+
+      return (
+        fullName.includes(normalizedQuery) ||
+        birthPlace.includes(normalizedQuery) ||
+        nickname.includes(normalizedQuery)
+      );
+    });
+  },
+
+  getChildren: (personId) => {
+    const { persons } = get();
+    const person = persons[personId];
+    if (!person) return [];
+    const childIds = [...new Set([...person.childrenIds, ...person.children])];
+    return childIds.map((id) => persons[id]).filter(Boolean);
+  },
+
+  getParents: (personId) => {
+    const { persons } = get();
+    const person = persons[personId];
+    if (!person) return [];
+    const parentIds = [
+      ...new Set(
+        [person.fatherId, person.motherId, ...person.parents].filter(Boolean)
+      ),
+    ] as string[];
+    return parentIds.map((id) => persons[id]).filter(Boolean);
+  },
+
+  getSpouses: (personId) => {
+    const { persons } = get();
+    const person = persons[personId];
+    if (!person) return [];
+    const spouseIdList = [
+      ...new Set([person.spouseId, ...person.spouseIds].filter(Boolean)),
+    ] as string[];
+    return spouseIdList.map((id) => persons[id]).filter(Boolean);
+  },
+
+  getSiblings: (personId) => {
+    const { persons } = get();
+    const person = persons[personId];
+    if (!person) return [];
+
+    const siblingIds = new Set<string>();
+
+    if (person.fatherId) {
+      const father = persons[person.fatherId];
+      father?.childrenIds.forEach((id) => {
+        if (id !== personId) siblingIds.add(id);
+      });
+      father?.children.forEach((id) => {
+        if (id !== personId) siblingIds.add(id);
+      });
+    }
+
+    if (person.motherId) {
+      const mother = persons[person.motherId];
+      mother?.childrenIds.forEach((id) => {
+        if (id !== personId) siblingIds.add(id);
+      });
+      mother?.children.forEach((id) => {
+        if (id !== personId) siblingIds.add(id);
+      });
+    }
+
+    return Array.from(siblingIds)
+      .map((id) => persons[id])
+      .filter(Boolean);
+  },
+}));

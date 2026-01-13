@@ -7,13 +7,14 @@ import styles from './Auth.module.css';
 
 export default function Register() {
   const register = useStore((state) => state.register);
+  const authError = useStore((state) => state.authError);
+  const storeLoading = useStore((state) => state.isLoading);
 
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -41,18 +42,13 @@ export default function Register() {
       return;
     }
 
-    setIsLoading(true);
-    try {
-      const success = register(email.trim(), password, displayName.trim());
-      if (!success) {
-        setError('This email is already registered');
-      }
-    } catch {
-      setError('Something went wrong. Please try again.');
-    } finally {
-      setIsLoading(false);
+    const success = await register(email.trim(), password, displayName.trim());
+    if (!success && !authError) {
+      setError('This email is already registered');
     }
   };
+
+  const displayError = error || authError;
 
   return (
     <div className={styles.container}>
@@ -67,10 +63,10 @@ export default function Register() {
           <p className={styles.subtitle}>Start preserving your family history</p>
         </div>
 
-        {error && (
+        {displayError && (
           <div className={styles.error}>
             <AlertCircle size={18} />
-            <span>{error}</span>
+            <span>{displayError}</span>
           </div>
         )}
 
@@ -133,9 +129,9 @@ export default function Register() {
           <button
             type="submit"
             className={styles.button}
-            disabled={isLoading}
+            disabled={storeLoading}
           >
-            {isLoading ? 'Creating Account...' : 'Create Account'}
+            {storeLoading ? 'Creating Account...' : 'Create Account'}
           </button>
         </form>
 

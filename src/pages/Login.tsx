@@ -7,11 +7,12 @@ import styles from './Auth.module.css';
 
 export default function Login() {
   const login = useStore((state) => state.login);
+  const authError = useStore((state) => state.authError);
+  const storeLoading = useStore((state) => state.isLoading);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -31,18 +32,13 @@ export default function Login() {
       return;
     }
 
-    setIsLoading(true);
-    try {
-      const success = login(email.trim(), password);
-      if (!success) {
-        setError('Invalid email or password');
-      }
-    } catch {
-      setError('Something went wrong. Please try again.');
-    } finally {
-      setIsLoading(false);
+    const success = await login(email.trim(), password);
+    if (!success && !authError) {
+      setError('Invalid email or password');
     }
   };
+
+  const displayError = error || authError;
 
   return (
     <div className={styles.container}>
@@ -55,10 +51,10 @@ export default function Login() {
           <p className={styles.subtitle}>Connect generations, preserve memories</p>
         </div>
 
-        {error && (
+        {displayError && (
           <div className={styles.error}>
             <AlertCircle size={18} />
-            <span>{error}</span>
+            <span>{displayError}</span>
           </div>
         )}
 
@@ -97,9 +93,9 @@ export default function Login() {
           <button
             type="submit"
             className={styles.button}
-            disabled={isLoading}
+            disabled={storeLoading}
           >
-            {isLoading ? 'Signing in...' : 'Sign In'}
+            {storeLoading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
 

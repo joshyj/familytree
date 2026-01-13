@@ -181,7 +181,7 @@ export default function PersonEdit() {
     reader.readAsDataURL(file);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!formData.firstName.trim()) {
@@ -190,7 +190,7 @@ export default function PersonEdit() {
     }
 
     if (isNew) {
-      const newPerson = addPerson({
+      const newPerson = await addPerson({
         firstName: formData.firstName.trim(),
         lastName: formData.lastName.trim(),
         nickname: formData.nickname.trim() || undefined,
@@ -204,9 +204,11 @@ export default function PersonEdit() {
         parentRelationships: formData.parentRelationships,
         parents: formData.parents,
       });
-      navigate(`/person/${newPerson.id}`);
+      if (newPerson) {
+        navigate(`/person/${newPerson.id}`);
+      }
     } else if (existingPerson) {
-      updatePerson(existingPerson.id, {
+      await updatePerson(existingPerson.id, {
         firstName: formData.firstName.trim(),
         lastName: formData.lastName.trim(),
         nickname: formData.nickname.trim() || undefined,
