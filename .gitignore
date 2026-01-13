@@ -30,3 +30,6 @@ playwright-report/
 *.log
 npm-debug.log*
 .vercel
+
+# Visual test screenshots
+screenshots/
